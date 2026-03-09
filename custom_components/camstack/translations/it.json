@@ -1,0 +1,55 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configurazione CamStack",
+        "description": "Scegli come CamStack è installato",
+        "data": {
+          "mode": "Modalità"
+        }
+      },
+      "embedded": {
+        "title": "Modalità embedded",
+        "data": {
+          "url_base": "URL Ingress"
+        }
+      },
+      "proxy_external": {
+        "title": "Proxy esterno",
+        "data": {
+          "url_base": "URL CamStack"
+        }
+      },
+      "proxy_scrypted": {
+        "title": "Proxy Scrypted",
+        "data": {
+          "scrypted_url": "URL Scrypted",
+          "scrypted_username": "Username",
+          "scrypted_password": "Password"
+        }
+      },
+      "import_cameras": {
+        "title": "Importa camere",
+        "description": "Seleziona quali camere Scrypted importare in Home Assistant",
+        "data": {
+          "cameras_to_import": "Camere da importare"
+        }
+      },
+      "panel_options": {
+        "title": "Opzioni pannello",
+        "data": {
+          "panel_title": "Titolo sidebar",
+          "panel_icon": "Icona sidebar"
+        }
+      }
+    },
+    "error": {
+      "url_required": "URL obbligatoria",
+      "invalid_url": "URL non valida (deve iniziare con http:// o https://)",
+      "cannot_connect": "Impossibile connettersi a Scrypted. Verifica URL e credenziali."
+    },
+    "abort": {
+      "already_configured": "CamStack è già configurato"
+    }
+  }
+}

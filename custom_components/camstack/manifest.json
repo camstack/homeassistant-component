@@ -1,0 +1,12 @@
+{
+  "domain": "camstack",
+  "name": "CamStack",
+  "codeowners": ["@apocaliss92"],
+  "config_flow": true,
+  "documentation": "https://github.com/apocaliss92/camstack",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/apocaliss92/camstack/issues",
+  "version": "0.1.0",
+  "dependencies": ["frontend", "http"]
+}
