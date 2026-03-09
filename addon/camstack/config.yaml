@@ -1,6 +1,6 @@
 name: CamStack
 description: CamStack PWA - universal video feed aggregator for surveillance cameras
-version: "1.0.0"
+version: "0.1.1"
 slug: camstack
 arch:
   - aarch64

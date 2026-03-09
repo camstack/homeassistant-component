@@ -2,6 +2,24 @@
 
 Integration and addon for [CamStack](https://github.com/apocaliss92/camstack) — universal video feed aggregator for surveillance cameras.
 
+## Versioning
+
+Version is in `VERSION`. Sync to manifest and addon config:
+
+```bash
+npm run version:sync
+```
+
+Bump and sync:
+
+```bash
+npm run version:patch   # 0.1.0 → 0.1.1
+npm run version:minor   # 0.1.0 → 0.2.0
+npm run version:major   # 0.1.0 → 1.0.0
+```
+
+Release: create a Git tag (e.g. `v0.1.0`) and GitHub release. HACS and the addon store use tags for versioning.
+
 ## Contents
 
 - **custom_components/camstack/** — Integration (HACS)
