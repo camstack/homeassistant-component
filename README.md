@@ -38,8 +38,16 @@ git push origin v0.1.0
 4. Restart Home Assistant
 5. Go to Settings → Devices & Services → Add Integration → CamStack
 
-## Modes
+## Configuration
 
-- **Embedded** — CamStack URL (e.g. addon ingress, self-hosted)
-- **Proxy external** — External CamStack URL (nginx, etc.)
-- **Proxy Scrypted** — Scrypted instance with CamStack (Advanced Notifier plugin), camera import supported
+Enter the **external URL** of your CamStack instance (e.g. `https://camstack.example.com` or `http://192.168.1.100:8080`). The integration adds a sidebar panel that embeds CamStack in an iframe.
+
+## Troubleshooting
+
+### Font preload warnings (Roboto-Regular.woff2, Roboto-Medium.woff2)
+
+These warnings appear when CamStack is served from the same origin as Home Assistant (e.g. via reverse proxy on the same host). They are harmless and do not affect functionality. To avoid them, serve CamStack from a different host or port.
+
+### button-card-action-handler already used
+
+This error occurs when the button-card Lovelace resource is loaded multiple times. Go to **Settings → Dashboard → Resources** (enable advanced mode first) and remove any duplicate button-card entries. Clear the browser cache after fixing.
