@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Bumps VERSION (patch/minor/major) and syncs to manifest and addon config.
+ * Bumps VERSION (patch/minor/major) and syncs to manifest.
  */
 const fs = require("fs");
 const path = require("path");
