@@ -1,6 +1,6 @@
 {
   "name": "camstack-homeassistant",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "scripts": {
     "version:sync": "node scripts/sync-version.js",
