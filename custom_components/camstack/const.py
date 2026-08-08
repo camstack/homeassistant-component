@@ -69,6 +69,16 @@ CAP_DOORBELL: Final = "doorbell"
 CAP_BATTERY: Final = "battery"
 CAP_ZONE_ANALYTICS: Final = "zone-analytics"
 CAP_AUDIO_METRICS: Final = "audio-metrics"
+CAP_PRIVACY_MASK: Final = "privacy-mask"
+CAP_CAMERA_STREAMS: Final = "camera-streams"
+
+# The hub addon that owns per-device Home Assistant export membership. It is
+# a `device-export` provider, exactly like the Alexa and HomeKit exporters,
+# and its exposed list is the ONLY per-device "export this to Home Assistant"
+# authority the hub has. The id says `mqtt` for historical reasons — the addon
+# also drives MQTT discovery — but the list names DEVICES, not topics, and
+# applies with or without a broker.
+HA_EXPORT_ADDON_ID: Final = "export-ha-mqtt"
 
 # tRPC event category carrying `{deviceId, capName, slice}`.
 EVENT_DEVICE_STATE_CHANGED: Final = "device.state-changed"

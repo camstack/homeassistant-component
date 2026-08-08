@@ -16,8 +16,8 @@ broker, no YAML, and the hub address is asked for exactly once.
 | Surface | What it covers |
 | --- | --- |
 | `camera` | One entity per CamStack camera. Stills from the hub's snapshot capability, live video over **native WebRTC** |
-| `binary_sensor` | Motion, plus a diagnostic reachability sensor per device (off by default) |
-| `sensor` | Temperature, humidity, pressure, generic numeric and enum readings, battery, and per-frame detected-object counts |
+| `binary_sensor` | Motion, reachability, privacy-mask state, and a diagnostic per-slot streaming sensor |
+| `sensor` | Temperature, humidity, pressure, generic numeric and enum readings, battery, per-frame detected-object counts, **per-zone object counts**, last motion and last doorbell press |
 | `switch` | The per-camera function switches: camera, object detection, privacy mask, microphone, audio distribution, audio detection, recording, notifications |
 | Sidebar panel | The CamStack web client, full screen, in the Home Assistant sidebar |
 | Lovelace card | `custom:camstack-grid-card` — a CamStack camera grid inside a dashboard |
@@ -117,9 +117,33 @@ any poll interval slow enough to be polite is slow enough to miss it.
 
 **The reconcile is the correctness backstop.** Once a minute — and on every
 stream reconnect, which is when a drop is most likely — the integration reads
-`deviceManager.listAll` and `deviceState.getAllSnapshots` and republishes
-everything. Hub events are telemetry and may be dropped, so a pump alone is not
-a contract.
+`deviceExport.listExposedDevices`, `deviceManager.listAll` and
+`deviceState.getAllSnapshots` and republishes everything. Hub events are
+telemetry and may be dropped, so a pump alone is not a contract.
+
+### Which devices are imported
+
+**The hub decides, not this integration.** Only devices exported to Home
+Assistant are imported. Membership lives on the hub's `device-export`
+capability — the same interface the Alexa and HomeKit exporters implement — and
+is read with `deviceExport.listExposedDevices`.
+
+Choose them in the CamStack admin UI, on each device's **Export → Home
+Assistant Export** panel. Nothing is stored on this side: a second opt-in list
+here could disagree with the hub's, and two switches that disagree are worse
+than one.
+
+Consequences worth knowing:
+
+- **An empty selection creates no entities.** That is the correct answer to
+  "the operator has exported nothing yet", and it is never widened into "import
+  everything" — which is what this integration used to do, producing an entity
+  for every one of ~300 hub devices.
+- **A device's unexported parents are still read**, because grouping walks the
+  parent chain. A camera's siren can be exported while the container above it
+  is not, and the tree must still collapse into one Home Assistant device.
+- **A device imported *from* Home Assistant is refused even if exported**,
+  because sending it back mirrors it across the bridge.
 
 ### An entity comes from a capability, not a device type
 
@@ -229,6 +253,14 @@ topics. The two are complementary, not competing:
 
 Both derive entities from capability slices and follow the same grouping and
 non-goal rules, so a device looks the same whichever path you use.
+
+**They share one device selection.** The MQTT exporter's addon is the hub's
+`device-export` provider for Home Assistant, so the per-device "Expose to Home
+Assistant" switch governs both paths. With no broker linked nothing is
+published over MQTT and the selection simply acts as this integration's
+allowlist. The addon id still says `mqtt` for historical reasons — it is baked
+into the addon's settings store, npm package name and deployed directory — but
+the list it holds names devices, not topics.
 
 ## The Home Assistant OS add-on
 

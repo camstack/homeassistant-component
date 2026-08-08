@@ -47,7 +47,9 @@ class CamStackEntity(CoordinatorEntity[CamStackCoordinator]):
                 manufacturer=MANUFACTURER,
             )
         root_id = data.root_device_id(self._device_id)
-        root = data.devices.get(root_id, device)
+        # The root is very often NOT exported itself, so it is looked up in the
+        # topology rather than the exported set.
+        root = data.topology.get(root_id, device)
         return DeviceInfo(
             identifiers={(DOMAIN, str(root_id))},
             name=root.name,

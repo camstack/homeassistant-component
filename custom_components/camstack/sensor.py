@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -29,7 +30,12 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import CAP_BATTERY, CAP_ZONE_ANALYTICS
+from .const import (
+    CAP_BATTERY,
+    CAP_DOORBELL,
+    CAP_MOTION,
+    CAP_ZONE_ANALYTICS,
+)
 from .coordinator import CamStackConfigEntry, CamStackCoordinator, CamStackDevice
 from .entity import CamStackEntity
 
@@ -39,7 +45,7 @@ class CamStackSensorDescription(SensorEntityDescription):
     """Describes one sensor and the slice field behind it."""
 
     cap_name: str
-    value_fn: Callable[[dict[str, Any]], float | int | str | None]
+    value_fn: Callable[[dict[str, Any]], float | int | str | datetime | None]
     unit_fn: Callable[[dict[str, Any]], str | None] | None = None
     # True for the reading a device exists to provide, which then carries the
     # device's own name. A secondary reading (a battery level) must keep its
@@ -63,6 +69,23 @@ def _text(field: str) -> Callable[[dict[str, Any]], str | None]:
     def read(slice_: dict[str, Any]) -> str | None:
         value = slice_.get(field)
         return value if isinstance(value, str) else None
+
+    return read
+
+
+def _timestamp(field: str) -> Callable[[dict[str, Any]], datetime | None]:
+    """Return a reader turning an epoch-millisecond field into a datetime.
+
+    The hub reports instants as epoch milliseconds. A `timestamp` sensor must
+    be timezone-aware or Home Assistant rejects the state, and `0` is the
+    hub's "never happened" sentinel rather than 1970.
+    """
+
+    def read(slice_: dict[str, Any]) -> datetime | None:
+        value = slice_.get(field)
+        if not isinstance(value, (int, float)) or value <= 0:
+            return None
+        return datetime.fromtimestamp(value / 1000, tz=UTC)
 
     return read
 
@@ -142,7 +165,41 @@ SENSOR_DESCRIPTIONS: tuple[CamStackSensorDescription, ...] = (
         ),
         state_class=SensorStateClass.MEASUREMENT,
     ),
+    CamStackSensorDescription(
+        key="last_motion",
+        translation_key="last_motion",
+        cap_name=CAP_MOTION,
+        value_fn=_timestamp("lastDetectedAt"),
+        device_class=SensorDeviceClass.TIMESTAMP,
+    ),
+    CamStackSensorDescription(
+        key="last_doorbell_press",
+        translation_key="last_doorbell_press",
+        cap_name=CAP_DOORBELL,
+        value_fn=_timestamp("lastPressedAt"),
+        device_class=SensorDeviceClass.TIMESTAMP,
+    ),
 )
+# NOT here, deliberately: an audio level and an audio class from
+# `audio-metrics`. The slice arrives several times a second per camera, and
+# this component's only update path is a coordinator refresh that wakes EVERY
+# entity. Rendering it would trade a wake storm for two entities most
+# installations disable — and a level that is not tracked would simply be
+# stale, which is the worse failure. It needs a per-entity update path first.
+
+
+def _zones_in(slice_: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return the per-zone records carried by a `zone-analytics` slice."""
+    if slice_ is None:
+        return []
+    zones = slice_.get("zones")
+    if not isinstance(zones, list):
+        return []
+    return [
+        zone
+        for zone in zones
+        if isinstance(zone, dict) and isinstance(zone.get("zoneId"), str)
+    ]
 
 
 async def async_setup_entry(
@@ -156,12 +213,21 @@ async def async_setup_entry(
     if data is None:
         return
 
-    async_add_entities(
+    entities: list[SensorEntity] = [
         CamStackSensor(coordinator, device, description)
         for device in data.devices.values()
         for description in SENSOR_DESCRIPTIONS
         if data.slice_for(device.device_id, description.cap_name) is not None
-    )
+    ]
+
+    # One occupancy count per zone. The device-level `objects` sensor above is
+    # a whole-frame total and cannot answer "how many people are on the
+    # driveway", which is the question zones exist for.
+    for device in data.devices.values():
+        for zone in _zones_in(data.slice_for(device.device_id, CAP_ZONE_ANALYTICS)):
+            entities.append(CamStackZoneObjectsSensor(coordinator, device, zone))
+
+    async_add_entities(entities)
 
 
 class CamStackSensor(CamStackEntity, SensorEntity):
@@ -185,7 +251,7 @@ class CamStackSensor(CamStackEntity, SensorEntity):
             self._attr_name = None
 
     @property
-    def native_value(self) -> float | int | str | None:
+    def native_value(self) -> float | int | str | datetime | None:
         """Return the current value from the slice."""
         slice_ = self.slice_for(self.entity_description.cap_name)
         if slice_ is None:
@@ -201,3 +267,71 @@ class CamStackSensor(CamStackEntity, SensorEntity):
             if slice_ is not None and (unit := unit_fn(slice_)) is not None:
                 return unit
         return self.entity_description.native_unit_of_measurement
+
+
+class CamStackZoneObjectsSensor(CamStackEntity, SensorEntity):
+    """How many tracked objects are currently inside one zone."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_translation_key = "zone_objects"
+
+    def __init__(
+        self,
+        coordinator: CamStackCoordinator,
+        device: CamStackDevice,
+        zone: dict[str, Any],
+    ) -> None:
+        """Bind the sensor to one zone of one camera.
+
+        The unique id is built from the zone's **id**, never its name, so
+        renaming a zone changes the friendly name and keeps the history. The
+        name is read live for the same reason.
+        """
+        zone_id = str(zone["zoneId"])
+        super().__init__(coordinator, device, f"zone_{zone_id}_objects")
+        self._zone_id = zone_id
+        self._fallback_name = str(zone.get("zoneName") or zone_id)
+
+    def _zone(self) -> dict[str, Any] | None:
+        """Return this zone's current record, or None once it is deleted."""
+        for zone in _zones_in(self.slice_for(CAP_ZONE_ANALYTICS)):
+            if zone.get("zoneId") == self._zone_id:
+                return zone
+        return None
+
+    @property
+    def translation_placeholders(self) -> dict[str, str]:
+        """Supply the zone's current display name to the entity name."""
+        zone = self._zone()
+        name = zone.get("zoneName") if zone is not None else None
+        return {
+            "zone": str(name) if isinstance(name, str) and name else self._fallback_name
+        }
+
+    @property
+    def available(self) -> bool:
+        """Go unavailable when the zone no longer exists.
+
+        A deleted zone must not keep reporting its last count: a frozen
+        number that looks like a reading is worse than a gap.
+        """
+        return super().available and self._zone() is not None
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the object count currently inside the zone."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        total = zone.get("totalObjects")
+        return total if isinstance(total, int) else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose the per-class breakdown the hub already computes."""
+        zone = self._zone()
+        by_class = zone.get("byClass") if zone is not None else None
+        return {
+            "zone_id": self._zone_id,
+            "by_class": by_class if isinstance(by_class, dict) else {},
+        }
