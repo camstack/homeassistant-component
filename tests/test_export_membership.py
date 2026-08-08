@@ -153,3 +153,66 @@ async def test_an_exported_device_from_home_assistant_is_still_refused(
     coordinator = await setup_integration(hass, config_entry)
 
     assert 1027 not in coordinator.data.devices
+
+
+# `device-export` is a COLLECTION capability: called without an `addonId` the
+# hub merges every export provider's list into one array. On the live cluster
+# that aggregate is the Alexa export's 3 devices plus the HomeKit export's 3,
+# while the Home Assistant provider's own list is empty. Reading the aggregate
+# therefore yields a filter that LOOKS like it works while honouring the wrong
+# authority — the operator would receive whatever they had exposed to Alexa and
+# HomeKit. This is D12 ("per-device aggregation never walks the global cap
+# list") applied to the read side.
+#
+# Recorded from the live hub on 2026-08-08.
+AGGREGATE_EXPOSED: list[dict[str, Any]] = [
+    {"deviceId": "615"},
+    {"deviceId": "590"},
+    {"deviceId": "587"},
+    {"deviceId": "587", "exposedAs": "Videocamera cucina DAF2"},
+    {"deviceId": "615", "exposedAs": "Videocamera ingresso ACBD"},
+    {"deviceId": "590", "exposedAs": "Videocamera salone 822D"},
+]
+
+
+def _provider_aware_responder() -> Any:
+    """Return a responder that answers `listExposedDevices` per provider.
+
+    This is the shape the hub actually has: an unpinned call merges every
+    exporter, a pinned one answers for that exporter alone.
+    """
+
+    async def respond(path: str, payload: Any | None = None) -> Any:
+        if path == "deviceExport.listExposedDevices":
+            addon_id = (payload or {}).get("addonId")
+            if addon_id is None:
+                return AGGREGATE_EXPOSED
+            if addon_id == HA_EXPORT_ADDON_ID:
+                # Nothing is exposed to Home Assistant, which is the live
+                # state today.
+                return []
+            return AGGREGATE_EXPOSED
+        return await _responder([])(path, payload)
+
+    return respond
+
+
+async def test_the_alexa_and_homekit_selections_are_not_imported(
+    hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
+) -> None:
+    """Only the Home Assistant provider's list counts.
+
+    Alexa and HomeKit each export three cameras; Home Assistant exports none.
+    The correct outcome is zero entities. An implementation that reads the
+    merged collection imports all three and looks entirely healthy doing it —
+    which is indistinguishable, from the operator's side, from the bug this
+    whole change exists to fix.
+    """
+    mock_client.query = AsyncMock(side_effect=_provider_aware_responder())
+
+    coordinator = await setup_integration(hass, config_entry)
+
+    assert coordinator.data.devices == {}
+    assert hass.states.get("camera.videocamera_ingresso") is None
+    # 615 is exposed to Alexa AND to HomeKit, and to Home Assistant by neither.
+    assert 615 not in coordinator.data.devices
