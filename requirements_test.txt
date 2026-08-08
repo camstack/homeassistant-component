@@ -1,0 +1,9 @@
+# Two Home Assistant generations are supported and both are exercised in CI.
+# The harness pins the HA version it tests against, so the Python version is
+# how you choose it: 3.14 -> HA 2026.8, 3.13 -> HA 2025.4.
+pytest-homeassistant-custom-component==0.13.354; python_version >= "3.14"
+pytest-homeassistant-custom-component==0.13.236; python_version < "3.14"
+
+# A test-only dependency of Home Assistant's own `camera` component, which this
+# integration declares. Without it every camera test errors during setup.
+PyTurboJPEG

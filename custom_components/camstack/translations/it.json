@@ -1,0 +1,72 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connetti un hub CamStack",
+        "description": "Inserisci l'indirizzo del tuo hub CamStack e un account che accetti. Il pannello nella barra laterale e la card Lovelace usano lo stesso indirizzo.",
+        "data": {
+          "host": "Host",
+          "port": "Porta",
+          "username": "Nome utente",
+          "password": "Password",
+          "verify_ssl": "Verifica il certificato SSL"
+        },
+        "data_description": {
+          "host": "Nome host o indirizzo IP dell'hub.",
+          "verify_ssl": "Lascia disattivato se l'hub usa un certificato autofirmato."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Autenticati di nuovo su CamStack",
+        "description": "Inserisci un account che l'hub accetti. Finché non ne ha uno, questa voce serve il pannello ma non crea nessuna entità.",
+        "data": {
+          "host": "Host",
+          "port": "Porta",
+          "username": "Nome utente",
+          "password": "Password",
+          "verify_ssl": "Verifica il certificato SSL"
+        },
+        "data_description": {
+          "host": "Conferma l'indirizzo dell'hub. È stato ricavato dall'URL che il pannello stava già usando e potrebbe puntare a un reverse proxy invece che all'hub.",
+          "verify_ssl": "Lascia disattivato se l'hub usa un certificato autofirmato."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossibile raggiungere l'hub a quell'indirizzo e porta.",
+      "invalid_auth": "L'hub ha rifiutato le credenziali. Gli account con autenticazione a due fattori non possono essere usati qui.",
+      "unknown": "Errore imprevisto. Controlla il log di Home Assistant."
+    },
+    "abort": {
+      "already_configured": "Questo hub è già configurato.",
+      "reauth_successful": "Autenticazione aggiornata."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Pannello CamStack",
+        "description": "Il pannello e la card Lovelace seguono l'indirizzo dell'hub già configurato. Sovrascrivilo solo se il browser raggiunge l'hub a un indirizzo diverso da quello usato da Home Assistant.",
+        "data": {
+          "panel_enabled": "Mostra CamStack nella barra laterale",
+          "panel_title": "Titolo nella barra laterale",
+          "panel_icon": "Icona nella barra laterale",
+          "panel_url": "URL del pannello (override)"
+        },
+        "data_description": {
+          "panel_icon": "Un nome di Material Design Icons, per esempio mdi:cctv.",
+          "panel_url": "Lascia vuoto per usare l'indirizzo dell'hub configurato."
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "motion": { "name": "Movimento" },
+      "reachable": { "name": "Raggiungibile" }
+    },
+    "sensor": {
+      "objects": { "name": "Oggetti rilevati" }
+    }
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to a CamStack hub",
+        "description": "Enter the address of your CamStack hub and an account it will accept. The sidebar panel and the Lovelace card use this same address.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "username": "Username",
+          "password": "Password",
+          "verify_ssl": "Verify SSL certificate"
+        },
+        "data_description": {
+          "host": "The hostname or IP address of the hub.",
+          "verify_ssl": "Leave this off if the hub uses a self-signed certificate."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate with CamStack",
+        "description": "Enter an account the hub will accept. Until it has one, this entry serves the sidebar panel but creates no entities.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "username": "Username",
+          "password": "Password",
+          "verify_ssl": "Verify SSL certificate"
+        },
+        "data_description": {
+          "host": "Confirm the hub address. It was derived from the URL your panel was already using and may point at a reverse proxy rather than at the hub itself.",
+          "verify_ssl": "Leave this off if the hub uses a self-signed certificate."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the hub at that address and port.",
+      "invalid_auth": "The hub rejected those credentials. Accounts protected by two-factor authentication cannot be used here.",
+      "unknown": "Unexpected error. Check the Home Assistant log for details."
+    },
+    "abort": {
+      "already_configured": "That hub is already configured.",
+      "reauth_successful": "Re-authentication was successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "CamStack panel",
+        "description": "The sidebar panel and the Lovelace card follow the hub address you configured. Override it only if your browser reaches the hub at a different address than Home Assistant does.",
+        "data": {
+          "panel_enabled": "Show CamStack in the sidebar",
+          "panel_title": "Sidebar title",
+          "panel_icon": "Sidebar icon",
+          "panel_url": "Panel URL override"
+        },
+        "data_description": {
+          "panel_icon": "Any Material Design Icons name, for example mdi:cctv.",
+          "panel_url": "Leave empty to use the configured hub address."
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "motion": { "name": "Motion" },
+      "reachable": { "name": "Reachable" }
+    },
+    "sensor": {
+      "objects": { "name": "Detected objects" }
+    }
+  }
+}

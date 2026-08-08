@@ -1,0 +1,13 @@
+.venv/
+.venv*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.DS_Store
+
+# The add-on image is built from `dist/`, which is produced by the CamStack
+# build and is never committed here. See addon/README.md.
+addon/camstack/dist/
