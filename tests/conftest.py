@@ -116,6 +116,22 @@ DEVICE_LIST: list[dict[str, Any]] = [
     DEVICE_ECHO,
 ]
 
+# `deviceExport.listExposedDevices`, verbatim from the live hub — note that
+# `deviceId` is a STRING here while `deviceManager.listAll` reports an int.
+# Comparing the two without converting matches nothing, and "nothing matched"
+# is indistinguishable from "nothing is exported", so the fixture keeps the
+# real type rather than the convenient one.
+#
+# 289 (the Ecowitt gateway) and 290 (its container) are deliberately ABSENT:
+# 291 is exported and its parents are not, which is the ordinary case and the
+# one that breaks grouping if the parent chain is resolved against the
+# exported set instead of the full topology.
+EXPOSED_DEVICES: list[dict[str, Any]] = [
+    {"deviceId": "615"},
+    {"deviceId": "585"},
+    {"deviceId": "291"},
+]
+
 SNAPSHOTS: dict[str, dict[str, dict[str, Any]]] = {
     "615": {
         "device-status": {"online": True, "lastChangedAt": 1786141769118},
@@ -249,6 +265,8 @@ def make_query_responder() -> Any:
     """Return an async responder mapping tRPC paths to recorded payloads."""
 
     async def respond(path: str, payload: Any | None = None) -> Any:
+        if path == "deviceExport.listExposedDevices":
+            return EXPOSED_DEVICES
         if path == "deviceManager.listAll":
             return DEVICE_LIST
         if path == "deviceState.getAllSnapshots":

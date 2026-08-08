@@ -26,12 +26,15 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import CamStackAuthError, CamStackClient, CamStackError
 from .const import (
     CAP_BATTERY,
+    CAP_CAMERA_STREAMS,
     CAP_DEVICE_STATUS,
     CAP_DOORBELL,
     CAP_MOTION,
+    CAP_PRIVACY_MASK,
     CAP_ZONE_ANALYTICS,
     DOMAIN,
     EVENT_DEVICE_STATE_CHANGED,
+    HA_EXPORT_ADDON_ID,
     RECONCILE_INTERVAL,
 )
 
@@ -43,7 +46,15 @@ type CamStackConfigEntry = ConfigEntry[CamStackCoordinator]
 # rather than applied: `audio-metrics` alone arrives several times a second per
 # camera, and waking every entity for a slice nothing displays is pure cost.
 TRACKED_CAPS: frozenset[str] = frozenset(
-    {CAP_DEVICE_STATUS, CAP_MOTION, CAP_DOORBELL, CAP_BATTERY, CAP_ZONE_ANALYTICS}
+    {
+        CAP_DEVICE_STATUS,
+        CAP_MOTION,
+        CAP_DOORBELL,
+        CAP_BATTERY,
+        CAP_ZONE_ANALYTICS,
+        CAP_PRIVACY_MASK,
+        CAP_CAMERA_STREAMS,
+    }
 )
 
 # Devices that came FROM Home Assistant are never exported back to it; doing so
@@ -92,7 +103,15 @@ class CamStackDevice:
 class CamStackData:
     """The whole hub view a platform reads from."""
 
+    # The devices the hub exports to Home Assistant. Entities are created for
+    # these and only these.
     devices: dict[int, CamStackDevice] = field(default_factory=dict)
+    # Every device the hub knows, exported or not. Kept because grouping walks
+    # the PARENT CHAIN, and an intermediate parent is very often not exported
+    # itself: a camera's siren is exported, its container is not. Resolving the
+    # root against the exported set alone stops the walk at the first gap and
+    # scatters one device tree into several Home Assistant devices.
+    topology: dict[int, CamStackDevice] = field(default_factory=dict)
     slices: dict[int, dict[str, dict[str, Any]]] = field(default_factory=dict)
     switches: dict[int, list[dict[str, Any]]] = field(default_factory=dict)
 
@@ -115,10 +134,10 @@ class CamStackData:
         current = device_id
         while current not in seen:
             seen.add(current)
-            device = self.devices.get(current)
+            device = self.topology.get(current)
             if device is None or device.parent_device_id is None:
                 return current
-            parent = self.devices.get(device.parent_device_id)
+            parent = self.topology.get(device.parent_device_id)
             if parent is None or parent.device_type == "hub":
                 return current
             current = parent.device_id
@@ -150,6 +169,7 @@ class CamStackCoordinator(DataUpdateCoordinator[CamStackData]):
     async def _async_update_data(self) -> CamStackData:
         """Perform a full reconcile against the hub."""
         try:
+            exported = await self._async_fetch_exported_ids()
             listing = await self.client.query("deviceManager.listAll", {})
             snapshots = await self.client.query("deviceState.getAllSnapshots", {})
         except CamStackAuthError as err:
@@ -160,17 +180,90 @@ class CamStackCoordinator(DataUpdateCoordinator[CamStackData]):
             raise UpdateFailed(str(err)) from err
 
         data = CamStackData()
+        skipped = 0
         for payload in listing if isinstance(listing, list) else []:
             if not isinstance(payload, dict):
                 continue
             device = CamStackDevice.from_payload(payload)
             if device is None or device.addon_id == ECHO_SOURCE_ADDON:
                 continue
+            data.topology[device.device_id] = device
+            # Export membership is the hub's decision, not this component's.
+            # A device the operator has not exported is not imported — the
+            # alternative is what this integration used to do, which was to
+            # create entities for every one of ~300 devices.
+            if device.device_id not in exported:
+                skipped += 1
+                continue
             data.devices[device.device_id] = device
+
+        _LOGGER.debug(
+            "Reconcile: %d exported, %d imported, %d hub devices not exported",
+            len(exported),
+            len(data.devices),
+            skipped,
+        )
+        if exported and not data.devices:
+            # Every exported id failed to match a live device. Silence here
+            # reads as "the hub has nothing", which is a different problem
+            # with a different fix.
+            _LOGGER.warning(
+                "The hub exports %d device(s) to Home Assistant, but none of them "
+                "appear in the device list. Exported ids: %s",
+                len(exported),
+                sorted(exported),
+            )
 
         data.slices = _normalise_snapshots(snapshots, data.devices.keys())
         data.switches = await self._async_fetch_switches(data.cameras())
         return data
+
+    async def _async_fetch_exported_ids(self) -> set[int]:
+        """Return the device ids the hub exports to Home Assistant.
+
+        Membership lives on the `device-export` capability — the same
+        interface the Alexa and HomeKit exporters implement — and is written
+        from the per-device Export panel in the CamStack admin UI. This
+        component only reads it: a second opt-in store kept here could
+        disagree with the hub's, and two switches that disagree are worse
+        than one.
+
+        An empty list is a legitimate answer meaning "the operator has
+        exported nothing yet", and it must NOT degrade into importing
+        everything. A failure to read, by contrast, is not an answer at all
+        and is raised so the coordinator retries rather than tearing down
+        every entity on one bad response.
+        """
+        result = await self.client.query(
+            "deviceExport.listExposedDevices", {"addonId": HA_EXPORT_ADDON_ID}
+        )
+        if not isinstance(result, list):
+            raise UpdateFailed(
+                "deviceExport.listExposedDevices did not return a list; "
+                f"got {type(result).__name__}"
+            )
+
+        exported: set[int] = set()
+        for entry in result:
+            if not isinstance(entry, dict):
+                continue
+            # The hub sends `deviceId` as a STRING on this capability while
+            # `deviceManager.listAll` sends an int. Comparing the two without
+            # converting silently matches nothing, which looks exactly like
+            # "nothing is exported".
+            raw = entry.get("deviceId")
+            try:
+                exported.add(int(raw))
+            except (TypeError, ValueError):
+                _LOGGER.debug("Ignoring unparsable exported device id: %r", raw)
+
+        if not exported:
+            _LOGGER.warning(
+                "No devices are exported to Home Assistant, so no entities will be "
+                "created. Choose them in the CamStack admin UI under each device's "
+                "Export panel (Home Assistant Export)."
+            )
+        return exported
 
     async def _async_fetch_switches(
         self, cameras: list[CamStackDevice]
