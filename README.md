@@ -38,7 +38,28 @@ Copy `custom_components/camstack` into your Home Assistant
 
 ## Configuration
 
-Everything is done in the UI. You are asked for:
+Everything is done in the UI, and the flow starts by asking **how** you want to
+connect.
+
+### Link with the hub (recommended)
+
+You give the hub's **Host**, **Port** and **Verify SSL**, and nothing else. Home
+Assistant sends you to the hub's own login and consent page — passkey, password,
+two-factor, whatever your hub is set up for — and you come back with a token
+Home Assistant refreshes on its own.
+
+No password is stored. The link shows up in the hub's admin UI under the OAuth
+sessions, where revoking it cuts Home Assistant off immediately, and accounts
+with two-factor authentication work normally because the hub, not this
+integration, runs the login.
+
+This needs a hub new enough to know about Home Assistant. The flow asks the hub
+first, and says so plainly if the answer is no — pick the other option in that
+case, and try again after updating the hub.
+
+### Use a username and password
+
+The original path, unchanged and still supported:
 
 - **Host** and **Port** — your hub, e.g. `192.168.1.9` and `4443`
 - **Username** and **Password** — a CamStack account
@@ -48,9 +69,9 @@ The credentials are validated against the hub before the entry is created, and
 the integration re-authenticates by itself when its session token expires. If
 the password later changes, Home Assistant raises a normal re-auth prompt.
 
-Accounts with two-factor authentication enabled **cannot** be used: a stored
-password alone can never answer a TOTP challenge, so the flow refuses rather
-than creating an entry that could never load.
+Accounts with two-factor authentication enabled **cannot** be used this way: a
+stored password alone can never answer a TOTP challenge, so the flow refuses
+rather than creating an entry that could never load. Link with the hub instead.
 
 ### The panel and the card do not ask for the address again
 

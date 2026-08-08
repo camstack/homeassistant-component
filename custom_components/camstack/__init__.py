@@ -13,6 +13,8 @@ serving the panel it was serving while Home Assistant asks for the rest.
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.const import (
     CONF_HOST,
     CONF_PASSWORD,
@@ -22,13 +24,15 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
-from .api import CamStackClient
-from .const import CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL
+from .api import CamStackAuth, CamStackClient, PasswordAuth
+from .const import CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL, DOMAIN
 from .coordinator import CamStackConfigEntry, CamStackCoordinator
 from .frontend import async_remove_panel, async_setup_frontend
-from .migration import async_migrate_entry, entry_has_credentials
+from .migration import async_migrate_entry, entry_has_credentials, entry_is_oauth
+from .oauth import CamStackOAuth2Implementation, OAuth2Auth
 
 __all__ = ["async_migrate_entry"]
 
@@ -57,8 +61,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: CamStackConfigEntry) -> 
         session,
         entry.data[CONF_HOST],
         entry.data[CONF_PORT],
-        entry.data[CONF_USERNAME],
-        entry.data[CONF_PASSWORD],
+        _build_auth(hass, entry, session, verify_ssl=verify_ssl),
         verify_ssl=verify_ssl,
     )
 
@@ -87,6 +90,42 @@ async def async_remove_entry(hass: HomeAssistant, entry: CamStackConfigEntry) ->
     in the sidebar, and deleting it must remove that panel too.
     """
     async_remove_panel(hass, entry.entry_id)
+
+
+def _build_auth(
+    hass: HomeAssistant,
+    entry: CamStackConfigEntry,
+    session: Any,
+    *,
+    verify_ssl: bool,
+) -> CamStackAuth:
+    """Return the way THIS entry authenticates.
+
+    An OAuth entry's implementation is rebuilt here rather than looked up:
+    Home Assistant's registry of implementations is in-memory, so it is empty
+    after a restart, and the entry holds everything needed to reconstruct it.
+    """
+    if entry_is_oauth(entry.data):
+        implementation = CamStackOAuth2Implementation(
+            hass,
+            entry.data[CONF_HOST],
+            entry.data[CONF_PORT],
+            verify_ssl=verify_ssl,
+        )
+        config_entry_oauth2_flow.async_register_implementation(
+            hass, DOMAIN, implementation
+        )
+        return OAuth2Auth(
+            config_entry_oauth2_flow.OAuth2Session(hass, entry, implementation)
+        )
+    return PasswordAuth(
+        session,
+        entry.data[CONF_HOST],
+        entry.data[CONF_PORT],
+        entry.data[CONF_USERNAME],
+        entry.data[CONF_PASSWORD],
+        verify_ssl=verify_ssl,
+    )
 
 
 async def _async_entry_updated(hass: HomeAssistant, entry: CamStackConfigEntry) -> None:

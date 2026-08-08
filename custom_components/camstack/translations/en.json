@@ -3,6 +3,27 @@
     "step": {
       "user": {
         "title": "Connect to a CamStack hub",
+        "description": "Link this Home Assistant to your CamStack hub. Linking sends you to the hub's own login page and Home Assistant never stores your password.",
+        "menu_options": {
+          "oauth": "Link with the hub (recommended)",
+          "manual": "Use a username and password"
+        }
+      },
+      "oauth": {
+        "title": "Connect to a CamStack hub",
+        "description": "Enter the address of your hub. You will be sent to the hub to sign in and approve the link, then returned here. The sidebar panel and the Lovelace card use this same address.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "verify_ssl": "Verify SSL certificate"
+        },
+        "data_description": {
+          "host": "The hostname or IP address of the hub.",
+          "verify_ssl": "Leave this off if the hub uses a self-signed certificate."
+        }
+      },
+      "manual": {
+        "title": "Connect with a username and password",
         "description": "Enter the address of your CamStack hub and an account it will accept. The sidebar panel and the Lovelace card use this same address.",
         "data": {
           "host": "Host",
@@ -35,11 +56,20 @@
     "error": {
       "cannot_connect": "Could not reach the hub at that address and port.",
       "invalid_auth": "The hub rejected those credentials. Accounts protected by two-factor authentication cannot be used here.",
-      "unknown": "Unexpected error. Check the Home Assistant log for details."
+      "unknown": "Unexpected error. Check the Home Assistant log for details.",
+      "oauth_unsupported": "This hub does not support linking yet. Update the hub, or continue with a username and password."
     },
     "abort": {
       "already_configured": "That hub is already configured.",
-      "reauth_successful": "Re-authentication was successful."
+      "reauth_successful": "Re-authentication was successful.",
+      "oauth_error": "The hub did not return a valid link. Try again.",
+      "oauth_timeout": "The hub did not answer in time.",
+      "oauth_unauthorized": "The hub refused the link request.",
+      "oauth_failed": "Could not obtain a token from the hub.",
+      "missing_configuration": "The CamStack integration is not configured for linking.",
+      "authorize_url_timeout": "Timed out generating the link to the hub.",
+      "no_url_available": "No link could be generated. Check that Home Assistant knows its own external address.",
+      "user_rejected_authorize": "The link was not approved on the hub."
     }
   },
   "options": {
@@ -62,11 +92,17 @@
   },
   "entity": {
     "binary_sensor": {
-      "motion": { "name": "Motion" },
-      "reachable": { "name": "Reachable" }
+      "motion": {
+        "name": "Motion"
+      },
+      "reachable": {
+        "name": "Reachable"
+      }
     },
     "sensor": {
-      "objects": { "name": "Detected objects" }
+      "objects": {
+        "name": "Detected objects"
+      }
     }
   }
 }

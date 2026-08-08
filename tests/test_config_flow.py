@@ -23,12 +23,21 @@ USER_INPUT = {
 }
 
 
-async def test_user_flow_creates_an_entry(
-    hass: HomeAssistant, mock_client: AsyncMock
-) -> None:
+async def start_manual_flow(hass: HomeAssistant) -> dict:
+    """Open the flow and take the username-and-password branch of the menu."""
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER}
     )
+    assert result["type"] is FlowResultType.MENU
+    return await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "manual"}
+    )
+
+
+async def test_user_flow_creates_an_entry(
+    hass: HomeAssistant, mock_client: AsyncMock
+) -> None:
+    result = await start_manual_flow(hass)
     assert result["type"] is FlowResultType.FORM
 
     result = await hass.config_entries.flow.async_configure(
@@ -54,9 +63,7 @@ async def test_user_flow_surfaces_failures_and_recovers(
     expected: str,
 ) -> None:
     mock_client.async_verify.side_effect = error
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
+    result = await start_manual_flow(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], USER_INPUT
     )
@@ -75,9 +82,7 @@ async def test_the_same_hub_cannot_be_added_twice(
     hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
 ) -> None:
     config_entry.add_to_hass(hass)
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
+    result = await start_manual_flow(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], USER_INPUT
     )
@@ -93,9 +98,7 @@ async def test_a_totp_protected_account_is_refused_not_stored(
     mock_client.async_verify.side_effect = CamStackAuthError(
         "account requires two-factor authentication"
     )
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
+    result = await start_manual_flow(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], USER_INPUT
     )

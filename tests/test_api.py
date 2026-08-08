@@ -12,11 +12,27 @@ import pytest
 
 from custom_components.camstack.api import (
     CamStackApiError,
+    CamStackAuth,
     CamStackAuthError,
     CamStackClient,
     _parse_sse_line,
     _unwrap,
 )
+
+
+class _FixedTokenAuth(CamStackAuth):
+    """Hands out one token and counts how often it was asked to renew."""
+
+    def __init__(self, token: str = "token") -> None:
+        self.token = token
+        self.renewals = 0
+
+    async def async_token(self) -> str:
+        return self.token
+
+    async def async_renew(self) -> str:
+        self.renewals += 1
+        return self.token
 
 
 def test_unwrap_returns_the_json_payload() -> None:
@@ -70,8 +86,7 @@ async def test_the_event_stream_refuses_compression() -> None:
     loudly — it makes motion arrive late, or never.
     """
     session = _RecordingSession()
-    client = CamStackClient(session, "hub", 4443, "u", "p")
-    client._token = "token"
+    client = CamStackClient(session, "hub", 4443, _FixedTokenAuth())
 
     async for _event in client.subscribe_events("device.state-changed"):
         pass
@@ -104,6 +119,46 @@ class _EmptyStreamResponse:
         return empty()
 
     async def __aenter__(self) -> _EmptyStreamResponse:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+
+async def test_a_rejected_token_is_renewed_exactly_once() -> None:
+    """Renew once behind a 401, then let the second failure surface.
+
+    Retrying forever behind a credential that is genuinely dead is how an
+    integration hammers a hub and never reaches reauth.
+    """
+    auth = _FixedTokenAuth()
+    session = _AlwaysUnauthorizedSession()
+    client = CamStackClient(session, "hub", 4443, auth)
+
+    with pytest.raises(CamStackAuthError):
+        await client.query("auth.me")
+
+    assert auth.renewals == 1
+    assert session.calls == 2
+
+
+class _AlwaysUnauthorizedSession:
+    """Answers 401 to everything, and counts."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def request(self, *_args: Any, **_kwargs: object) -> Any:
+        self.calls += 1
+        return _UnauthorizedResponse()
+
+
+class _UnauthorizedResponse:
+    """A 401."""
+
+    status = 401
+
+    async def __aenter__(self) -> _UnauthorizedResponse:
         return self
 
     async def __aexit__(self, *_exc: object) -> bool:

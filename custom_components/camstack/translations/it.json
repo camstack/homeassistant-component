@@ -3,6 +3,27 @@
     "step": {
       "user": {
         "title": "Connetti un hub CamStack",
+        "description": "Collega questo Home Assistant al tuo hub CamStack. Il collegamento ti porta alla pagina di accesso dell'hub e Home Assistant non salva nessuna password.",
+        "menu_options": {
+          "oauth": "Collega tramite l'hub (consigliato)",
+          "manual": "Usa nome utente e password"
+        }
+      },
+      "oauth": {
+        "title": "Connetti un hub CamStack",
+        "description": "Inserisci l'indirizzo del tuo hub. Verrai portato sull'hub per accedere e approvare il collegamento, poi riportato qui. Il pannello nella barra laterale e la card Lovelace usano lo stesso indirizzo.",
+        "data": {
+          "host": "Host",
+          "port": "Porta",
+          "verify_ssl": "Verifica il certificato SSL"
+        },
+        "data_description": {
+          "host": "Nome host o indirizzo IP dell'hub.",
+          "verify_ssl": "Lascia disattivato se l'hub usa un certificato autofirmato."
+        }
+      },
+      "manual": {
+        "title": "Connetti con nome utente e password",
         "description": "Inserisci l'indirizzo del tuo hub CamStack e un account che accetti. Il pannello nella barra laterale e la card Lovelace usano lo stesso indirizzo.",
         "data": {
           "host": "Host",
@@ -35,11 +56,20 @@
     "error": {
       "cannot_connect": "Impossibile raggiungere l'hub a quell'indirizzo e porta.",
       "invalid_auth": "L'hub ha rifiutato le credenziali. Gli account con autenticazione a due fattori non possono essere usati qui.",
-      "unknown": "Errore imprevisto. Controlla il log di Home Assistant."
+      "unknown": "Errore imprevisto. Controlla il log di Home Assistant.",
+      "oauth_unsupported": "Questo hub non supporta ancora il collegamento. Aggiorna l'hub, oppure prosegui con nome utente e password."
     },
     "abort": {
       "already_configured": "Questo hub è già configurato.",
-      "reauth_successful": "Autenticazione aggiornata."
+      "reauth_successful": "Autenticazione aggiornata.",
+      "oauth_error": "L'hub non ha restituito un collegamento valido. Riprova.",
+      "oauth_timeout": "L'hub non ha risposto in tempo.",
+      "oauth_unauthorized": "L'hub ha rifiutato la richiesta di collegamento.",
+      "oauth_failed": "Impossibile ottenere un token dall'hub.",
+      "missing_configuration": "L'integrazione CamStack non è configurata per il collegamento.",
+      "authorize_url_timeout": "Timeout nella generazione del collegamento all'hub.",
+      "no_url_available": "Impossibile generare il collegamento. Verifica che Home Assistant conosca il proprio indirizzo esterno.",
+      "user_rejected_authorize": "Il collegamento non è stato approvato sull'hub."
     }
   },
   "options": {
@@ -62,11 +92,17 @@
   },
   "entity": {
     "binary_sensor": {
-      "motion": { "name": "Movimento" },
-      "reachable": { "name": "Raggiungibile" }
+      "motion": {
+        "name": "Movimento"
+      },
+      "reachable": {
+        "name": "Raggiungibile"
+      }
     },
     "sensor": {
-      "objects": { "name": "Oggetti rilevati" }
+      "objects": {
+        "name": "Oggetti rilevati"
+      }
     }
   }
 }

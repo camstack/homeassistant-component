@@ -27,6 +27,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     CONF_PANEL_URL,
+    CONF_TOKEN_BUNDLE,
     CONF_VERIFY_SSL,
     CONFIG_ENTRY_VERSION,
     DEFAULT_PORT,
@@ -105,6 +106,17 @@ def _split_legacy_url(url: str) -> tuple[str, int]:
     return parsed.hostname, port
 
 
+def entry_is_oauth(data: Mapping[str, Any]) -> bool:
+    """Return whether this entry authenticates with an OAuth token bundle."""
+    return isinstance(data.get(CONF_TOKEN_BUNDLE), Mapping)
+
+
 def entry_has_credentials(data: Mapping[str, Any]) -> bool:
-    """Return whether an entry can log in to a hub at all."""
+    """Return whether an entry can authenticate against a hub at all.
+
+    Two shapes qualify, and a migrated panel-only entry has neither — which is
+    exactly why this is a question and not an assumption.
+    """
+    if entry_is_oauth(data):
+        return True
     return bool(data.get(CONF_USERNAME)) and bool(data.get(CONF_PASSWORD))

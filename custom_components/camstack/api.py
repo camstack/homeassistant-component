@@ -9,6 +9,12 @@ The hub speaks tRPC over HTTP:
 Every response is wrapped as ``{"result": {"data": {"json": ...}}}`` or
 ``{"error": {...}}``. This module is the only place that knows that, so no
 other file in the integration builds a URL or unwraps an envelope.
+
+How the bearer token is obtained is NOT this module's business: a
+:class:`CamStackAuth` supplies it. Two exist — :class:`PasswordAuth`, which
+logs in with the credentials the operator typed, and ``OAuth2Auth`` in
+``oauth.py``, which reads the token Home Assistant refreshes. The retry-once-
+behind-a-fresh-token path is identical for both.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import quote
@@ -48,8 +55,32 @@ class CamStackApiError(CamStackError):
     """The hub answered, and the answer was an error."""
 
 
-class CamStackClient:
-    """Calls the CamStack hub and re-authenticates when its token expires."""
+def base_url_for(host: str, port: int) -> str:
+    """Return the hub's root URL. The hub is HTTPS-only."""
+    return f"https://{host}:{port}"
+
+
+class CamStackAuth(ABC):
+    """Supplies the bearer token every hub call carries.
+
+    Two implementations differ in ONE way that matters: a password can be
+    replayed to mint a fresh token, an OAuth access token cannot — Home
+    Assistant refreshes it or the link needs redoing. ``async_renew`` is
+    therefore allowed to fail, and the client treats that as a real
+    credential problem rather than retrying forever.
+    """
+
+    @abstractmethod
+    async def async_token(self) -> str:
+        """Return a token to send, obtaining one if there is none yet."""
+
+    @abstractmethod
+    async def async_renew(self) -> str:
+        """Discard the current token and obtain another. May raise."""
+
+
+class PasswordAuth(CamStackAuth):
+    """Mints a hub session token from a username and a password."""
 
     def __init__(
         self,
@@ -61,34 +92,38 @@ class CamStackClient:
         *,
         verify_ssl: bool = False,
     ) -> None:
-        """Store connection parameters. No I/O happens here."""
+        """Store credentials. No I/O happens here."""
         self._session = session
-        self._host = host
-        self._port = port
+        self._base_url = base_url_for(host, port)
         self._username = username
         self._password = password
         self._verify_ssl = verify_ssl
         self._token: str | None = None
         self._login_lock = asyncio.Lock()
+        self._identity: dict[str, Any] = {}
 
     @property
-    def base_url(self) -> str:
-        """Return the hub's root URL."""
-        return f"https://{self._host}:{self._port}"
+    def identity(self) -> dict[str, Any]:
+        """Return the user record the last login reported, if any."""
+        return self._identity
 
-    @property
-    def token(self) -> str | None:
-        """Return the current session token, if one has been minted."""
+    async def async_token(self) -> str:
+        """Return the current token, logging in when there is none."""
+        if self._token is None:
+            return await self.async_renew()
         return self._token
 
-    async def async_login(self) -> dict[str, Any]:
-        """Mint a session token and return the authenticated user record."""
+    async def async_renew(self) -> str:
+        """Log in to the hub and keep the token it hands back."""
         async with self._login_lock:
-            result = await self._request(
+            result = await trpc_request(
+                self._session,
+                self._base_url,
                 "POST",
                 "auth.login",
                 {"username": self._username, "password": self._password},
-                authenticated=False,
+                token=None,
+                verify_ssl=self._verify_ssl,
             )
             if not isinstance(result, dict) or "token" not in result:
                 raise CamStackAuthError("hub returned no token")
@@ -99,11 +134,37 @@ class CamStackClient:
                 raise CamStackAuthError("account requires two-factor authentication")
             self._token = str(result["token"])
             user = result.get("user")
-            return user if isinstance(user, dict) else {}
+            self._identity = user if isinstance(user, dict) else {}
+            return self._token
+
+
+class CamStackClient:
+    """Calls the CamStack hub and renews its token when the hub rejects it."""
+
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        host: str,
+        port: int,
+        auth: CamStackAuth,
+        *,
+        verify_ssl: bool = False,
+    ) -> None:
+        """Store connection parameters. No I/O happens here."""
+        self._session = session
+        self._host = host
+        self._port = port
+        self._auth = auth
+        self._verify_ssl = verify_ssl
+
+    @property
+    def base_url(self) -> str:
+        """Return the hub's root URL."""
+        return base_url_for(self._host, self._port)
 
     async def async_verify(self) -> dict[str, Any]:
-        """Log in and confirm the token is accepted. Used by the config flow."""
-        await self.async_login()
+        """Obtain a token and confirm the hub accepts it. Used by the flow."""
+        await self._auth.async_token()
         me = await self.query("auth.me")
         if not isinstance(me, dict):
             raise CamStackAuthError("hub accepted the login but returned no identity")
@@ -120,16 +181,15 @@ class CamStackClient:
     async def _authenticated_request(
         self, method: str, path: str, payload: Any | None
     ) -> Any:
-        """Call the hub, minting or refreshing the token when required."""
-        if self._token is None:
-            await self.async_login()
+        """Call the hub, obtaining or renewing the token when required."""
+        token = await self._auth.async_token()
         try:
-            return await self._request(method, path, payload)
+            return await self._request(method, path, payload, token=token)
         except CamStackAuthError:
-            # The token expired or was revoked. One retry behind a fresh login;
+            # The token expired or was revoked. One retry behind a renewal;
             # a second failure is a real credential problem and must surface.
-            await self.async_login()
-            return await self._request(method, path, payload)
+            token = await self._auth.async_renew()
+            return await self._request(method, path, payload, token=token)
 
     async def _request(
         self,
@@ -137,38 +197,18 @@ class CamStackClient:
         path: str,
         payload: Any | None,
         *,
-        authenticated: bool = True,
+        token: str | None,
     ) -> Any:
         """Perform one tRPC call and unwrap its envelope."""
-        url = f"{self.base_url}/trpc/{path}"
-        headers = {"content-type": "application/json"}
-        if authenticated and self._token:
-            headers["authorization"] = f"Bearer {self._token}"
-
-        body: str | None = None
-        if method == "POST":
-            body = json.dumps({"json": payload if payload is not None else {}})
-        elif payload is not None:
-            url += f"?input={quote(json.dumps({'json': payload}))}"
-
-        try:
-            async with self._session.request(
-                method,
-                url,
-                headers=headers,
-                data=body,
-                ssl=self._verify_ssl,
-                timeout=_REQUEST_TIMEOUT,
-            ) as response:
-                if response.status in (401, 403):
-                    raise CamStackAuthError(f"{path}: hub rejected the token")
-                text = await response.text()
-        except TimeoutError as err:
-            raise CamStackConnectionError(f"{path}: timed out") from err
-        except aiohttp.ClientError as err:
-            raise CamStackConnectionError(f"{path}: {err}") from err
-
-        return _unwrap(path, text)
+        return await trpc_request(
+            self._session,
+            self.base_url,
+            method,
+            path,
+            payload,
+            token=token,
+            verify_ssl=self._verify_ssl,
+        )
 
     async def subscribe_events(
         self, category: str | None = None
@@ -178,8 +218,7 @@ class CamStackClient:
         The caller owns the retry loop: this generator ends when the stream
         ends, and never reconnects behind the caller's back.
         """
-        if self._token is None:
-            await self.async_login()
+        token = await self._auth.async_token()
 
         payload: dict[str, Any] = {"category": category} if category else {}
         url = (
@@ -188,7 +227,7 @@ class CamStackClient:
         )
         headers = {
             "accept": "text/event-stream",
-            "authorization": f"Bearer {self._token}",
+            "authorization": f"Bearer {token}",
             # MEASURED, not defensive. aiohttp advertises gzip by default and
             # the hub honours it on `text/event-stream`, which then only
             # reaches the client when the compressor's buffer fills. On a
@@ -204,7 +243,8 @@ class CamStackClient:
                 url, headers=headers, ssl=self._verify_ssl, timeout=_STREAM_TIMEOUT
             ) as response:
                 if response.status in (401, 403):
-                    self._token = None
+                    # The caller owns the retry loop and will come back through
+                    # `async_token`; renewing here would race it.
                     raise CamStackAuthError("event stream: hub rejected the token")
                 if response.status != 200:
                     raise CamStackApiError(
@@ -218,6 +258,53 @@ class CamStackClient:
             raise CamStackConnectionError("event stream: timed out") from err
         except aiohttp.ClientError as err:
             raise CamStackConnectionError(f"event stream: {err}") from err
+
+
+async def trpc_request(
+    session: aiohttp.ClientSession,
+    base_url: str,
+    method: str,
+    path: str,
+    payload: Any | None = None,
+    *,
+    token: str | None = None,
+    verify_ssl: bool = False,
+) -> Any:
+    """Perform one tRPC call against `base_url` and unwrap its envelope.
+
+    Module level, not a client method, because `PasswordAuth` needs it to log
+    in and the client needs it for everything else. One place knows the wire
+    format; a second copy is how the two drift.
+    """
+    url = f"{base_url}/trpc/{path}"
+    headers = {"content-type": "application/json"}
+    if token:
+        headers["authorization"] = f"Bearer {token}"
+
+    body: str | None = None
+    if method == "POST":
+        body = json.dumps({"json": payload if payload is not None else {}})
+    elif payload is not None:
+        url += f"?input={quote(json.dumps({'json': payload}))}"
+
+    try:
+        async with session.request(
+            method,
+            url,
+            headers=headers,
+            data=body,
+            ssl=verify_ssl,
+            timeout=_REQUEST_TIMEOUT,
+        ) as response:
+            if response.status in (401, 403):
+                raise CamStackAuthError(f"{path}: hub rejected the token")
+            text = await response.text()
+    except TimeoutError as err:
+        raise CamStackConnectionError(f"{path}: timed out") from err
+    except aiohttp.ClientError as err:
+        raise CamStackConnectionError(f"{path}: {err}") from err
+
+    return _unwrap(path, text)
 
 
 def _parse_sse_line(raw_line: bytes) -> dict[str, Any] | None:

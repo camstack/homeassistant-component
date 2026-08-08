@@ -14,6 +14,24 @@ CONFIG_ENTRY_VERSION: Final = 2
 
 CONF_VERIFY_SSL: Final = "verify_ssl"
 
+# Written by `config_entry_oauth2_flow`, not by this component. Named here
+# because two other modules read them and a literal in three files is how the
+# key that HA actually uses and the key we look for stop being the same one.
+CONF_AUTH_IMPLEMENTATION: Final = "auth_implementation"
+CONF_TOKEN_BUNDLE: Final = "token"
+
+# The hub registers this integration as a PUBLIC OAuth client. There is no
+# secret: the source is published, and PKCE is what binds a code to the
+# instance that requested it. See the hub's
+# `docs/design/2026-08-08-ha-oauth-onboarding.md`.
+OAUTH_INTEGRATION_ID: Final = "homeassistant"
+OAUTH_CLIENT_ID: Final = "homeassistant"
+OAUTH_AUTHORIZE_PATH: Final = "/api/oauth2/authorize"
+OAUTH_TOKEN_PATH: Final = "/api/oauth2/token"
+# Absent (404) on every hub released before OAuth onboarding shipped. That is
+# the whole point of asking: it tells an OLD hub from a REFUSING one.
+OAUTH_DISCOVERY_PATH: Final = "/api/oauth2/integrations"
+
 # Panel/card settings. `panel_url` is written by the migration and never asked
 # for: the address comes from `host` and `port`, and asking twice is how the
 # panel and the entities end up pointing at different hubs.
