@@ -1,10 +1,18 @@
 # CamStack for Home Assistant
 
 The Home Assistant component for a [CamStack](https://github.com/camstack) hub.
-Your cameras, motion, sensors and per-camera function switches become
-first-class Home Assistant entities over the hub's own API — and the CamStack
-web client is available as a sidebar panel and as a Lovelace card. No MQTT
-broker, no YAML, and the hub address is asked for exactly once.
+**CamStack pushes; Home Assistant never polls it for a value.** Detections,
+zone counts, camera controls and every base device kind arrive over one
+authenticated HTTP endpoint this component registers, and live video comes
+straight from the hub over native WebRTC. The CamStack web client is available
+as a sidebar panel and as a Lovelace card. No MQTT broker, no YAML, and the hub
+address is asked for exactly once.
+
+> **Nothing is imported until you export it.** Devices reach Home Assistant
+> only when they are exposed in the CamStack admin UI, under the device's
+> **Export → Home Assistant Export** panel. A fresh install with nothing
+> exported creates no entities, says so in the log, and that is the integration
+> working — see [Which devices are imported](#which-devices-are-imported).
 
 > **This repository is the home of the `camstack` Home Assistant domain.**
 > A second component briefly existed at `camstack/homeassistant`; it was merged
@@ -13,14 +21,27 @@ broker, no YAML, and the hub address is asked for exactly once.
 
 ## What you get
 
+The hub decides what exists. This component builds whatever it is sent, so the
+list below describes today's hub rather than a limit of the integration.
+
 | Surface | What it covers |
 | --- | --- |
-| `camera` | One entity per CamStack camera. Stills from the hub's snapshot capability, live video over **native WebRTC** |
-| `binary_sensor` | Motion, reachability, privacy-mask state, and a diagnostic per-slot streaming sensor |
-| `sensor` | Temperature, humidity, pressure, generic numeric and enum readings, battery, per-frame detected-object counts, **per-zone object counts**, last motion and last doorbell press |
-| `switch` | The per-camera function switches: camera, object detection, privacy mask, microphone, audio distribution, audio detection, recording, notifications |
+| `camera` | One entity per exported CamStack camera. Stills from the hub's snapshot capability, live video over **native WebRTC** |
+| `binary_sensor` | `triggered`, `online`, per-macro `person`/`vehicle`/`animal`/`package`/`motion`/`audio` detection, per-zone detection, battery charging and sleeping |
+| `sensor` | Last detection and last identification per macro and per zone, per-zone object counts, battery, and every reading a base device's capability models — temperature, humidity, pressure, illuminance, power |
+| `image` | The last crop, per camera, per macro class and per zone. Fetched on demand from a signed, expiring URL — pictures never cross the push transport |
+| `switch` | The per-camera function switches, plus writable capabilities on base devices such as a lock or a siren |
+| `button` | Reboot, and the PTZ steps, on cameras that declare the capability |
+| `select` | Snooze durations and PTZ presets |
+| `number` | Writable numeric capabilities, such as a light's brightness |
 | Sidebar panel | The CamStack web client, full screen, in the Home Assistant sidebar |
 | Lovelace card | `custom:camstack-grid-card` — a CamStack camera grid inside a dashboard |
+
+**Most entities arrive switched off.** A camera with three zones carries ~73 of
+them, and the hub marks everything an operator would not automate on
+`enabled_by_default: false`. `*_detected`, `triggered`, `online`, `last_image`
+and the controls are enabled; the rest are registered and waiting for you to
+enable them in the entity settings.
 
 ## Install
 
@@ -108,25 +129,50 @@ no entity exists. That is the intended state, not a failure.
 
 ## How it works
 
-Two feeds, and they are not interchangeable.
+**CamStack pushes.** The hub's `homeassistant-export` addon POSTs to
+`/api/camstack/push`, a view this component registers inside Home Assistant and
+which sits behind Home Assistant's own authentication — the hub uses the
+long-lived token you already gave it, so there is no second secret to configure
+or rotate. Four message types, and each carries its own guarantee:
 
-**The event stream is the live path.** The integration holds a Server-Sent
-Events subscription to the hub's `live.onEvent`, filtered server-side to
-`device.state-changed`. A motion pulse can auto-clear after three seconds, so
-any poll interval slow enough to be polite is slow enough to miss it.
+| Message | What it is |
+| --- | --- |
+| `heartbeat` | Liveness, every 30 seconds, and the **only** availability signal. When it stops, every entity goes unavailable — deliberately no second source that could disagree about whether camstack is alive |
+| `batch` | State updates accumulate hub-side and arrive together. Across ~880 entities that batching is the difference between an installation and a storm |
+| `state_update` | One topic, one value, always a string. Deduped hub-side, so an unchanged value never arrives twice |
+| `entity_change` | A device's **complete** component set, never a delta, re-sent in full on every reconcile. This component diffs against it and never accumulates, so a dropped message repairs itself instead of leaving half a device behind |
 
-**The reconcile is the correctness backstop.** Once a minute — and on every
-stream reconnect, which is when a drop is most likely — the integration reads
-`deviceExport.listExposedDevices`, `deviceManager.listAll` and
-`deviceState.getAllSnapshots` and republishes everything. Hub events are
-telemetry and may be dropped, so a pump alone is not a contract.
+**Commands go the other way** as `{topic, value}` POSTed to the export addon's
+own route on the hub. The hub refuses an unroutable command rather than
+approximating it, and the refusal reaches you as an error instead of a toggle
+that moved and did nothing.
+
+**Pictures never cross the transport.** An `image` entity receives a signed,
+expiring URL and fetches the bytes on demand, at most once every ten seconds
+per entity. A detection crop is hundreds of kilobytes and a camera has ten image
+entities; sending bytes would turn every detection into a multi-megabyte POST.
+
+### Two details that look like bugs and are not
+
+**The first push after a reload is answered 503, on purpose.** The hub sends a
+value only when it changed, and it drops that per-topic cache when the link
+returns — which it detects as a failed POST followed by a successful one.
+Reloading this integration produces no such edge, because a Home Assistant view
+cannot be unregistered and keeps answering 200 while the entities behind it are
+new and empty. They would then stay blank until each value happened to change
+on its own. One deliberate refusal manufactures the edge; the hub re-pushes
+everything on its next reconcile.
+
+**Structure and last values are kept on disk.** The hub re-announces on its
+reconcile, up to five minutes away, so without this every entity would sit
+blank after each Home Assistant restart. They come back immediately, and
+unavailable, until the first heartbeat proves camstack is alive.
 
 ### Which devices are imported
 
 **The hub decides, not this integration.** Only devices exported to Home
 Assistant are imported. Membership lives on the hub's `device-export`
-capability — the same interface the Alexa and HomeKit exporters implement — and
-is read with `deviceExport.listExposedDevices`.
+capability — the same interface the Alexa and HomeKit exporters implement.
 
 Choose them in the CamStack admin UI, on each device's **Export → Home
 Assistant Export** panel. Nothing is stored on this side: a second opt-in list
@@ -135,60 +181,50 @@ than one.
 
 Consequences worth knowing:
 
-- **An empty selection creates no entities.** That is the correct answer to
-  "the operator has exported nothing yet", and it is never widened into "import
-  everything" — which is what this integration used to do, producing an entity
-  for every one of ~300 hub devices.
-- **A device's unexported parents are still read**, because grouping walks the
-  parent chain. A camera's siren can be exported while the container above it
-  is not, and the tree must still collapse into one Home Assistant device.
+- **An empty selection creates nothing.** That is the correct answer to "the
+  operator has exported nothing yet", and it is never widened into "import
+  everything" — which is what this integration used to do, producing entities
+  for every device on the hub. The log says so, and names the panel to use.
+- **Devices you exposed to Alexa or HomeKit are not included.** The read is
+  pinned to the Home Assistant exporter. `device-export` is a collection
+  capability and an unpinned read merges every exporter, which would import
+  somebody else's selection while looking entirely healthy.
+- **A pin the hub cannot resolve fails setup loudly**, with the hub's own
+  message naming the exporters that do exist. A broken integration that looks
+  like an empty one is the single most expensive failure here.
 - **A device imported *from* Home Assistant is refused even if exported**,
-  because sending it back mirrors it across the bridge.
+  because sending it back mirrors it across the bridge. Both sides enforce it.
 
-### An entity comes from a capability, not a device type
+### The component is generic
 
-The hub returns each device's state as `capName → slice`, and this integration
-maps **slices** to entities. A device type tells you almost nothing — a dozen
-capabilities are bound to every device regardless of what it is — so the map is
-an allowlist keyed by capability name. An unmapped capability produces no
-entity at all rather than one that never receives a value. A wrong value is a
-worse failure than a missing one: nothing about it looks broken.
+It builds entities out of the component set the hub sends and knows nothing
+about cameras, zones or detection classes. All of that lives on the camstack
+side, which is what lets the hub add an entity — or a whole device kind —
+without this component being released. It has its own HACS release cadence, and
+two shipping chains that must move together are two shipping chains that drift.
 
-For the same reason units are read from the **live slice** wherever the
-capability carries one. A Fahrenheit feed is not relabelled as °C.
+A platform this version cannot build costs that one entity and logs a line
+naming it. Everything else on the device is unaffected.
 
-### One device tree, one Home Assistant device
+### One CamStack device, one Home Assistant device
 
-Entities attach to the root of the CamStack parent chain, stopping before a
-`hub`-type ancestor. On a live 300-device cluster that yields tens of Home
-Assistant devices rather than hundreds of orphans: a camera's siren becomes a
-control on the camera's card, while the sub-stations under a weather gateway
-stay distinct devices instead of collapsing into it.
+Identity is the hub's `device_id` (`camstack-<stableId>`), which is also what
+the camera entity uses — so the live view and the sensors land on one device
+instead of two that look like duplicates. It is derived from the **stable** id
+rather than the numeric one: numeric ids are reallocated by a re-sync, and an
+entity keyed on one would follow whichever camera inherited the number.
 
 ### Switches store nothing
 
-The per-camera switches mirror the hub's own switch group, which is itself a
-view onto whatever authority already owned each function. A switch here writes
-exactly what the CamStack UI writes, so the two surfaces cannot drift.
+Every switch is a mirror. The hub renders it from the authority that already
+owns the function and applies it back through the same one, so a toggle here
+writes exactly what the CamStack UI writes and the two cannot drift.
 
-Two behaviours follow and both matter:
-
-- a switch the hub reports as **unavailable** is rendered unavailable, never as
-  "off" — "this camera cannot do that" and "an operator turned that off" are
-  different facts and an automation must be able to tell them apart;
-- a write that the hub refuses raises an error and confirms nothing. The
-  optimistic value is corrected by the next reconcile rather than silently
-  accepted.
-
-`privacy-mask` is the one switch whose **on** means the picture is deliberately
-obscured, rather than that a function is working. That polarity is the hub's,
-and mirroring it verbatim is what keeps this toggle agreeing with every other
-CamStack client.
-
-### Devices that came from Home Assistant are not sent back
-
-CamStack can import Home Assistant devices. Those are excluded here — exporting
-them back would create a device that mirrors itself across the bridge.
+- A switch the hub reports as **unavailable** produces **no entity at all** —
+  a control defaulted to "on" because a source did not answer is exactly the
+  lie that flag exists to prevent.
+- A write the hub refuses raises an error and confirms nothing. An accepted one
+  shows immediately and is corrected by the hub's next push if it disagreed.
 
 ## The Lovelace card
 
@@ -228,39 +264,22 @@ lovelace:
 - **A track.** A CamStack track is a time-bounded observation, not a thing with
   a current state. There is no Home Assistant entity whose state is "an
   occurrence between t0 and t1"; forcing one gives you an entity whose state is
-  an opaque id and whose history cannot be graphed or templated. The per-frame
-  object **count** is exported instead, because that *is* a thing with a
-  current state.
-- **Media.** Clips, recorded segments, crops, embeddings. These are bytes
-  addressed by handle. A still is displayable and is displayed; a clip has no
-  Home Assistant type.
+  an opaque id and whose history cannot be graphed or templated. The per-zone
+  object **count** and the last-detection timestamp are exported instead,
+  because those *are* things with a current state.
+- **Clips.** Recorded segments and embeddings are bytes addressed by handle. A
+  still is displayable and is displayed; a clip has no Home Assistant type.
 - **Geometry.** Motion zones, privacy masks and detection regions are polygons.
   Home Assistant has no polygon entity. The derived per-zone occupancy count is
   a sensor; the shape that defines the zone stays in the CamStack UI.
 
-## Relationship to the MQTT exporter
+## The MQTT exporter is retired
 
-CamStack also ships `addon-export-ha-mqtt`, which publishes MQTT discovery
-topics. The two are complementary, not competing:
-
-| | MQTT exporter | This component |
-| --- | --- | --- |
-| Lives in | the CamStack server monorepo | this repository |
-| Needs | an MQTT broker both sides can reach | nothing but the hub |
-| Direction | CamStack pushes | Home Assistant pulls and subscribes |
-| Live video | no | yes, native WebRTC |
-| Best for | broad read-only coverage of every device | cameras and the controls around them |
-
-Both derive entities from capability slices and follow the same grouping and
-non-goal rules, so a device looks the same whichever path you use.
-
-**They share one device selection.** The MQTT exporter's addon is the hub's
-`device-export` provider for Home Assistant, so the per-device "Expose to Home
-Assistant" switch governs both paths. With no broker linked nothing is
-published over MQTT and the selection simply acts as this integration's
-allowlist. The addon id still says `mqtt` for historical reasons — it is baked
-into the addon's settings store, npm package name and deployed directory — but
-the list it holds names devices, not topics.
+CamStack used to ship `addon-export-ha-mqtt`, which published MQTT discovery
+topics. It was **deleted on 2026-08-09** and Home Assistant is now served over
+one path only, by this component. Nothing was migrated: its exposed set was
+empty. If you pinned anything to the `export-ha-mqtt` addon id, the hub now
+refuses that id outright and names `homeassistant-export` in its place.
 
 ## The Home Assistant OS add-on
 
@@ -271,12 +290,13 @@ from it. It is **not published as an add-on repository** — see
 
 ## Roadmap
 
+- The synthetic devices from the design: a **Notification Center** carrying one
+  switch per notification rule, and a **CamStack Server** device carrying node
+  health, addon health and the liveness monitor's findings
+- `alarm_control_panel`, which the hub maps but does not yet project a state for
 - Doorbell presses and classified detections on Home Assistant's `event` platform
-- The remaining command surfaces: covers, locks, climate, fan, vacuum, siren,
-  lawn mower, alarm panel
-- Per-zone occupancy sensors (the aggregate exists; the per-zone breakout does not)
-- A bridge device carrying node health, and `via_device` grouping under it
-- Snapshot cadence driven by the hub's per-device etag rather than on demand
+- A range on the wire for `number` entities; Home Assistant's 0-100 default
+  applies until then
 
 ## Development
 
