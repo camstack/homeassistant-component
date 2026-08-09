@@ -4,11 +4,19 @@ Every payload below is a **verbatim shape taken from a live CamStack hub**, not
 a shape invented to match this code. A fake that supplies what production
 forgot to fetch produces a green suite over a broken integration, so the
 fixtures are recordings and the assertions are about behaviour.
+
+The `entity_change` fixtures in `fixtures/` go one better: they were generated
+by running the hub's OWN `entity-catalog.ts` — 51 components for a camera with
+one zone and PTZ, 3 for a derived sensor. Nothing in them was typed by hand,
+so a component key or a payload that this integration gets wrong here gets it
+wrong against the hub too.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Generator
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -16,6 +24,7 @@ import pytest
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.camstack.api import CamStackRequestError
 from custom_components.camstack.const import (
     CONF_VERIFY_SSL,
     CONFIG_ENTRY_VERSION,
@@ -24,6 +33,20 @@ from custom_components.camstack.const import (
 )
 
 pytest_plugins = "pytest_homeassistant_custom_component"
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def load_fixture(name: str) -> dict[str, Any]:
+    """Return one recorded push message."""
+    return json.loads((_FIXTURES / name).read_text(encoding="utf-8"))
+
+
+ENTITY_CHANGE_CAMERA: dict[str, Any] = load_fixture("entity_change_camera.json")
+ENTITY_CHANGE_SENSOR: dict[str, Any] = load_fixture("entity_change_sensor.json")
+
+CAMERA_KEY: str = ENTITY_CHANGE_CAMERA["device_id"]
+SENSOR_KEY: str = ENTITY_CHANGE_SENSOR["device_id"]
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +76,7 @@ DEVICE_CAMERA: dict[str, Any] = {
 
 DEVICE_SIREN: dict[str, Any] = {
     "id": 585,
+    "stableId": "hikvision:585",
     "addonId": "provider-hikvision",
     "type": "siren",
     "name": "Sirena ingresso",
@@ -64,6 +88,7 @@ DEVICE_SIREN: dict[str, Any] = {
 
 DEVICE_HUB: dict[str, Any] = {
     "id": 289,
+    "stableId": "ecowitt:1",
     "addonId": "provider-ecowitt",
     "type": "hub",
     "name": "Ecowitt Gateway",
@@ -75,6 +100,7 @@ DEVICE_HUB: dict[str, Any] = {
 
 DEVICE_STATION: dict[str, Any] = {
     "id": 290,
+    "stableId": "ecowitt:1:gateway",
     "addonId": "provider-ecowitt",
     "type": "container",
     "name": "Ecowitt Gateway - gateway",
@@ -86,6 +112,7 @@ DEVICE_STATION: dict[str, Any] = {
 
 DEVICE_SENSOR: dict[str, Any] = {
     "id": 291,
+    "stableId": "ecowitt:1:tempinf",
     "addonId": "provider-ecowitt",
     "type": "sensor",
     "name": "Indoor Temperature",
@@ -98,6 +125,7 @@ DEVICE_SENSOR: dict[str, Any] = {
 # Came FROM Home Assistant; exporting it back would mirror it across the bridge.
 DEVICE_ECHO: dict[str, Any] = {
     "id": 1027,
+    "stableId": "ha:person.someone",
     "addonId": "provider-homeassistant",
     "type": "presence",
     "name": "Someone",
@@ -123,77 +151,32 @@ DEVICE_LIST: list[dict[str, Any]] = [
 # real type rather than the convenient one.
 #
 # 289 (the Ecowitt gateway) and 290 (its container) are deliberately ABSENT:
-# 291 is exported and its parents are not, which is the ordinary case and the
-# one that breaks grouping if the parent chain is resolved against the
-# exported set instead of the full topology.
+# 291 is exported and its parents are not, which is the ordinary case.
 EXPOSED_DEVICES: list[dict[str, Any]] = [
-    {"deviceId": "615"},
-    {"deviceId": "585"},
-    {"deviceId": "291"},
+    {"deviceId": "615", "exposedAs": "Home Assistant"},
+    {"deviceId": "585", "exposedAs": "Home Assistant"},
+    {"deviceId": "291", "exposedAs": "Home Assistant"},
 ]
 
-SNAPSHOTS: dict[str, dict[str, dict[str, Any]]] = {
-    "615": {
-        "device-status": {"online": True, "lastChangedAt": 1786141769118},
-        "motion": {
-            "detected": False,
-            "lastDetectedAt": 1786142120749,
-            "autoClearAfterMs": 3000,
+# The hub's refusal of an unresolvable `addonId`, recorded verbatim on
+# 2026-08-09. It enumerates the providers that DO exist, which is the whole
+# reason it must reach the operator instead of being flattened into "no
+# devices were exported".
+UNRESOLVABLE_ADDON_ERROR: dict[str, Any] = {
+    "json": {
+        "message": (
+            'Capability "device-export" has no provider with addonId '
+            '"export-ha-mqtt". Valid addonId(s): export-alexa, '
+            "homeassistant-export, export-hap. An unresolvable addonId is "
+            "refused rather than answered by another provider."
+        ),
+        "code": -32600,
+        "data": {
+            "code": "BAD_REQUEST",
+            "httpStatus": 400,
+            "path": "deviceExport.listExposedDevices",
         },
-        "zone-analytics": {
-            "ts": 1786142087470,
-            "frame": {"totalObjects": 0, "byClass": {}},
-            "zones": [],
-        },
-        "audio-metrics": {"ts": 1786142213797, "peakDbfs": -50.3},
-    },
-    "291": {
-        "device-status": {"online": True, "lastChangedAt": 1786035411846},
-        "temperature-sensor": {
-            "celsius": 23.7,
-            "lastFetchedAt": 1786142299890,
-            "unit": "C",
-        },
-        "battery": {
-            "percentage": 100,
-            "charging": "none",
-            "sleeping": False,
-            "lastUpdated": 1786035411846,
-        },
-    },
-    "1027": {"device-status": {"online": True, "lastChangedAt": 1}},
-}
-
-SWITCH_GROUP: dict[str, Any] = {
-    "deviceId": 615,
-    "fetchedAt": 1786142400000,
-    "switches": [
-        {
-            "id": "stream-broker",
-            "label": "Camera",
-            "costWhenOff": "Off: the whole camera stops.",
-            "available": True,
-            "enabled": True,
-            "authority": {"kind": "device-disabled"},
-        },
-        {
-            "id": "object-detection",
-            "label": "Object detection & tracking",
-            "costWhenOff": "Off: nothing is detected or tracked on this camera.",
-            "available": True,
-            "enabled": True,
-            "authority": {"kind": "wrapper-binding", "capName": "detection-pipeline"},
-        },
-        {
-            "id": "privacy-mask",
-            "label": "Privacy mask",
-            "costWhenOff": "On: the zones you drew are blacked out by the camera.",
-            "available": False,
-            "unavailableReason": "not-configured",
-            "enabled": False,
-            "authority": {"kind": "camera-mask", "capName": "privacy-mask"},
-        },
-    ],
+    }
 }
 
 ME: dict[str, Any] = {
@@ -261,18 +244,40 @@ def legacy_entity_entry() -> MockConfigEntry:
     )
 
 
-def make_query_responder() -> Any:
-    """Return an async responder mapping tRPC paths to recorded payloads."""
+def make_query_responder(
+    exposed: list[dict[str, Any]] | None = None,
+) -> Any:
+    """Return an async responder that answers like the hub does.
+
+    Three behaviours are reproduced because getting any of them wrong makes a
+    broken filter look healthy:
+
+    * **pinned** to an exporter, `listExposedDevices` returns that exporter's
+      list alone;
+    * **unpinned** it merges every exporter into one array, which is what
+      makes an unpinned read import somebody else's selection;
+    * **pinned to an id the hub does not have** it REFUSES, naming the valid
+      ids, instead of answering from another provider.
+
+    A fake that answered the same with and without the pin would let the
+    defect this file exists to catch pass green.
+    """
+    per_provider = EXPOSED_DEVICES if exposed is None else exposed
 
     async def respond(path: str, payload: Any | None = None) -> Any:
         if path == "deviceExport.listExposedDevices":
-            return EXPOSED_DEVICES
+            addon_id = (payload or {}).get("addonId")
+            if addon_id is None:
+                return per_provider + AGGREGATE_EXPOSED
+            if addon_id == "homeassistant-export":
+                return per_provider
+            if addon_id in ("export-alexa", "export-hap"):
+                return AGGREGATE_EXPOSED
+            raise CamStackRequestError(
+                f"{path}: {UNRESOLVABLE_ADDON_ERROR['json']['message']}"
+            )
         if path == "deviceManager.listAll":
             return DEVICE_LIST
-        if path == "deviceState.getAllSnapshots":
-            return SNAPSHOTS
-        if path == "pipelineOrchestrator.getCameraSwitches":
-            return SWITCH_GROUP
         if path == "auth.me":
             return ME
         if path == "snapshot.getSnapshot":
@@ -282,16 +287,37 @@ def make_query_responder() -> Any:
     return respond
 
 
+# What the OTHER exporters have. On the live cluster the Alexa export and the
+# HomeKit export each hold three cameras while the Home Assistant provider
+# holds none, so reading the merged collection imports somebody else's
+# selection and looks entirely healthy doing it (D12).
+AGGREGATE_EXPOSED: list[dict[str, Any]] = [
+    {"deviceId": "615", "exposedAs": "Videocamera ingresso ACBD"},
+    {"deviceId": "590", "exposedAs": "Videocamera salone 822D"},
+    {"deviceId": "587", "exposedAs": "Videocamera cucina DAF2"},
+]
+
+
+async def setup_integration(hass: Any, config_entry: MockConfigEntry) -> Any:
+    """Load the integration and return its runtime data."""
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    return config_entry.runtime_data
+
+
+async def push(hass: Any, config_entry: MockConfigEntry, message: Any) -> None:
+    """Deliver one message as the hub's POST would, and settle."""
+    config_entry.runtime_data.push.async_handle_message(message)
+    await hass.async_block_till_done()
+
+
+HEARTBEAT: dict[str, Any] = {"type": "heartbeat", "ts": 1786142400000}
+
+
 @pytest.fixture
 def mock_client() -> Generator[AsyncMock]:
     """Patch the API client used by both the integration and the config flow."""
-
-    async def never_yields(*_args: Any, **_kwargs: Any) -> Any:
-        # The event stream must be inert in tests: a real one would make every
-        # assertion depend on timing.
-        if False:  # pragma: no cover
-            yield {}
-
     with (
         patch(
             "custom_components.camstack.CamStackClient", autospec=True
@@ -302,9 +328,9 @@ def mock_client() -> Generator[AsyncMock]:
     ):
         client = integration_client.return_value
         client.query = AsyncMock(side_effect=make_query_responder())
-        client.mutate = AsyncMock(return_value=SWITCH_GROUP)
+        client.mutate = AsyncMock(return_value={})
+        client.async_post_addon_route = AsyncMock(return_value=None)
         client.async_login = AsyncMock(return_value=ME)
         client.async_verify = AsyncMock(return_value=ME)
-        client.subscribe_events = never_yields
         flow_client.return_value = client
         yield client

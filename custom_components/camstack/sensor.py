@@ -1,205 +1,21 @@
-"""Sensors derived from CamStack capability slices.
-
-Each descriptor names the capability it reads, the field inside that slice, and
-where its unit comes from. Units are read from the **live slice** wherever the
-capability carries one, and fall back to the canonical unit only when it does
-not — a Fahrenheit feed rendered as °C because the exporter hardcoded the
-canonical unit is a wrong value, and a wrong value is worse than a missing one:
-nothing about it looks broken.
-"""
+"""Sensors built from the components CamStack pushes."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any
+from datetime import datetime
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
-    SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import (
-    PERCENTAGE,
-    EntityCategory,
-    UnitOfPressure,
-    UnitOfTemperature,
-)
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import dt as dt_util
 
-from .const import (
-    CAP_BATTERY,
-    CAP_DOORBELL,
-    CAP_MOTION,
-    CAP_ZONE_ANALYTICS,
-)
-from .coordinator import CamStackConfigEntry, CamStackCoordinator, CamStackDevice
-from .entity import CamStackEntity
-
-
-@dataclass(frozen=True, kw_only=True)
-class CamStackSensorDescription(SensorEntityDescription):
-    """Describes one sensor and the slice field behind it."""
-
-    cap_name: str
-    value_fn: Callable[[dict[str, Any]], float | int | str | datetime | None]
-    unit_fn: Callable[[dict[str, Any]], str | None] | None = None
-    # True for the reading a device exists to provide, which then carries the
-    # device's own name. A secondary reading (a battery level) must keep its
-    # own label, or two sensors on one device collide into a `_2` suffix.
-    primary: bool = False
-
-
-def _number(field: str) -> Callable[[dict[str, Any]], float | int | None]:
-    """Return a reader for a numeric slice field."""
-
-    def read(slice_: dict[str, Any]) -> float | int | None:
-        value = slice_.get(field)
-        return value if isinstance(value, (int, float)) else None
-
-    return read
-
-
-def _text(field: str) -> Callable[[dict[str, Any]], str | None]:
-    """Return a reader for a string slice field."""
-
-    def read(slice_: dict[str, Any]) -> str | None:
-        value = slice_.get(field)
-        return value if isinstance(value, str) else None
-
-    return read
-
-
-def _timestamp(field: str) -> Callable[[dict[str, Any]], datetime | None]:
-    """Return a reader turning an epoch-millisecond field into a datetime.
-
-    The hub reports instants as epoch milliseconds. A `timestamp` sensor must
-    be timezone-aware or Home Assistant rejects the state, and `0` is the
-    hub's "never happened" sentinel rather than 1970.
-    """
-
-    def read(slice_: dict[str, Any]) -> datetime | None:
-        value = slice_.get(field)
-        if not isinstance(value, (int, float)) or value <= 0:
-            return None
-        return datetime.fromtimestamp(value / 1000, tz=UTC)
-
-    return read
-
-
-def _temperature_unit(slice_: dict[str, Any]) -> str:
-    """Return the unit the temperature slice reports, defaulting to Celsius."""
-    unit = slice_.get("unit")
-    if isinstance(unit, str) and unit.upper().startswith("F"):
-        return UnitOfTemperature.FAHRENHEIT
-    return UnitOfTemperature.CELSIUS
-
-
-SENSOR_DESCRIPTIONS: tuple[CamStackSensorDescription, ...] = (
-    CamStackSensorDescription(
-        key="battery",
-        cap_name=CAP_BATTERY,
-        value_fn=_number("percentage"),
-        device_class=SensorDeviceClass.BATTERY,
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    CamStackSensorDescription(
-        key="temperature",
-        primary=True,
-        cap_name="temperature-sensor",
-        value_fn=_number("celsius"),
-        unit_fn=_temperature_unit,
-        device_class=SensorDeviceClass.TEMPERATURE,
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
-    CamStackSensorDescription(
-        key="humidity",
-        primary=True,
-        cap_name="humidity-sensor",
-        value_fn=_number("percent"),
-        device_class=SensorDeviceClass.HUMIDITY,
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
-    CamStackSensorDescription(
-        key="pressure",
-        primary=True,
-        cap_name="pressure-sensor",
-        value_fn=_number("hpa"),
-        device_class=SensorDeviceClass.PRESSURE,
-        native_unit_of_measurement=UnitOfPressure.HPA,
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
-    CamStackSensorDescription(
-        key="numeric",
-        primary=True,
-        cap_name="numeric-sensor",
-        value_fn=_number("value"),
-        unit_fn=_text("unit"),
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
-    CamStackSensorDescription(
-        key="enum",
-        primary=True,
-        cap_name="enum-sensor",
-        value_fn=_text("value"),
-    ),
-    CamStackSensorDescription(
-        key="objects",
-        translation_key="objects",
-        cap_name=CAP_ZONE_ANALYTICS,
-        # A track is a time-bounded observation, not a thing with a current
-        # state, so it is not an entity. The per-frame COUNT is — it is exactly
-        # "a thing with a current state", and it graphs.
-        value_fn=lambda slice_: (
-            frame.get("totalObjects")
-            if isinstance(frame := slice_.get("frame"), dict)
-            and isinstance(frame.get("totalObjects"), int)
-            else None
-        ),
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
-    CamStackSensorDescription(
-        key="last_motion",
-        translation_key="last_motion",
-        cap_name=CAP_MOTION,
-        value_fn=_timestamp("lastDetectedAt"),
-        device_class=SensorDeviceClass.TIMESTAMP,
-    ),
-    CamStackSensorDescription(
-        key="last_doorbell_press",
-        translation_key="last_doorbell_press",
-        cap_name=CAP_DOORBELL,
-        value_fn=_timestamp("lastPressedAt"),
-        device_class=SensorDeviceClass.TIMESTAMP,
-    ),
-)
-# NOT here, deliberately: an audio level and an audio class from
-# `audio-metrics`. The slice arrives several times a second per camera, and
-# this component's only update path is a coordinator refresh that wakes EVERY
-# entity. Rendering it would trade a wake storm for two entities most
-# installations disable — and a level that is not tracked would simply be
-# stale, which is the worse failure. It needs a per-entity update path first.
-
-
-def _zones_in(slice_: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """Return the per-zone records carried by a `zone-analytics` slice."""
-    if slice_ is None:
-        return []
-    zones = slice_.get("zones")
-    if not isinstance(zones, list):
-        return []
-    return [
-        zone
-        for zone in zones
-        if isinstance(zone, dict) and isinstance(zone.get("zoneId"), str)
-    ]
+from .coordinator import CamStackConfigEntry
+from .entity import CamStackPushEntity
 
 
 async def async_setup_entry(
@@ -207,131 +23,62 @@ async def async_setup_entry(
     entry: CamStackConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Create a sensor for every slice a device actually carries."""
-    coordinator = entry.runtime_data
-    data = coordinator.data
-    if data is None:
-        return
-
-    entities: list[SensorEntity] = [
-        CamStackSensor(coordinator, device, description)
-        for device in data.devices.values()
-        for description in SENSOR_DESCRIPTIONS
-        if data.slice_for(device.device_id, description.cap_name) is not None
-    ]
-
-    # One occupancy count per zone. The device-level `objects` sensor above is
-    # a whole-frame total and cannot answer "how many people are on the
-    # driveway", which is the question zones exist for.
-    for device in data.devices.values():
-        for zone in _zones_in(data.slice_for(device.device_id, CAP_ZONE_ANALYTICS)):
-            entities.append(CamStackZoneObjectsSensor(coordinator, device, zone))
-
-    async_add_entities(entities)
+    """Let the push hub create sensors as it learns about them."""
+    entry.runtime_data.push.async_register_platform(
+        Platform.SENSOR, CamStackSensor, async_add_entities
+    )
 
 
-class CamStackSensor(CamStackEntity, SensorEntity):
-    """A sensor reading one field of one capability slice."""
-
-    entity_description: CamStackSensorDescription
-
-    def __init__(
-        self,
-        coordinator: CamStackCoordinator,
-        device: CamStackDevice,
-        description: CamStackSensorDescription,
-    ) -> None:
-        """Bind the sensor to a (device, slice-field) pair."""
-        super().__init__(coordinator, device, description.key)
-        self.entity_description = description
-        if description.primary:
-            # A station's temperature reads better as the station's own name
-            # than as a generic label bolted onto it. Only the primary reading
-            # may claim it; everything else keeps its own label.
-            self._attr_name = None
+class CamStackSensor(CamStackPushEntity, SensorEntity):
+    """A pushed reading: a timestamp, a number or a label."""
 
     @property
-    def native_value(self) -> float | int | str | datetime | None:
-        """Return the current value from the slice."""
-        slice_ = self.slice_for(self.entity_description.cap_name)
-        if slice_ is None:
+    def device_class(self) -> SensorDeviceClass | None:
+        """Return the device class the hub asked for, if HA has it."""
+        raw = self._component.get("device_class")
+        if not isinstance(raw, str):
             return None
-        return self.entity_description.value_fn(slice_)
+        try:
+            return SensorDeviceClass(raw)
+        except ValueError:
+            return None
+
+    @property
+    def state_class(self) -> SensorStateClass | None:
+        """Return the state class the hub asked for, if HA has it."""
+        raw = self._component.get("state_class")
+        if not isinstance(raw, str):
+            return None
+        try:
+            return SensorStateClass(raw)
+        except ValueError:
+            return None
 
     @property
     def native_unit_of_measurement(self) -> str | None:
-        """Return the unit the slice reports, falling back to the canonical one."""
-        unit_fn = self.entity_description.unit_fn
-        if unit_fn is not None:
-            slice_ = self.slice_for(self.entity_description.cap_name)
-            if slice_ is not None and (unit := unit_fn(slice_)) is not None:
-                return unit
-        return self.entity_description.native_unit_of_measurement
+        """Return the unit the hub sent."""
+        unit = self._component.get("unit_of_measurement")
+        return unit if isinstance(unit, str) else None
 
+    @property
+    def native_value(self) -> datetime | float | str | None:
+        """Return the pushed value in the type its device class requires.
 
-class CamStackZoneObjectsSensor(CamStackEntity, SensorEntity):
-    """How many tracked objects are currently inside one zone."""
-
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_translation_key = "zone_objects"
-
-    def __init__(
-        self,
-        coordinator: CamStackCoordinator,
-        device: CamStackDevice,
-        zone: dict[str, Any],
-    ) -> None:
-        """Bind the sensor to one zone of one camera.
-
-        The unique id is built from the zone's **id**, never its name, so
-        renaming a zone changes the friendly name and keeps the history. The
-        name is read live for the same reason.
+        Everything arrives as a string, so the conversion happens here. A
+        value that will not convert is dropped to `None` rather than passed
+        through: Home Assistant raises on a timestamp sensor holding text, and
+        it swallows that inside the state write — the entity then silently
+        never updates again.
         """
-        zone_id = str(zone["zoneId"])
-        super().__init__(coordinator, device, f"zone_{zone_id}_objects")
-        self._zone_id = zone_id
-        self._fallback_name = str(zone.get("zoneName") or zone_id)
-
-    def _zone(self) -> dict[str, Any] | None:
-        """Return this zone's current record, or None once it is deleted."""
-        for zone in _zones_in(self.slice_for(CAP_ZONE_ANALYTICS)):
-            if zone.get("zoneId") == self._zone_id:
-                return zone
-        return None
-
-    @property
-    def translation_placeholders(self) -> dict[str, str]:
-        """Supply the zone's current display name to the entity name."""
-        zone = self._zone()
-        name = zone.get("zoneName") if zone is not None else None
-        return {
-            "zone": str(name) if isinstance(name, str) and name else self._fallback_name
-        }
-
-    @property
-    def available(self) -> bool:
-        """Go unavailable when the zone no longer exists.
-
-        A deleted zone must not keep reporting its last count: a frozen
-        number that looks like a reading is worse than a gap.
-        """
-        return super().available and self._zone() is not None
-
-    @property
-    def native_value(self) -> int | None:
-        """Return the object count currently inside the zone."""
-        zone = self._zone()
-        if zone is None:
+        raw = self._value
+        if raw is None:
             return None
-        total = zone.get("totalObjects")
-        return total if isinstance(total, int) else None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Expose the per-class breakdown the hub already computes."""
-        zone = self._zone()
-        by_class = zone.get("byClass") if zone is not None else None
-        return {
-            "zone_id": self._zone_id,
-            "by_class": by_class if isinstance(by_class, dict) else {},
-        }
+        device_class = self.device_class
+        if device_class is SensorDeviceClass.TIMESTAMP:
+            return dt_util.parse_datetime(raw)
+        if device_class is not None or self.native_unit_of_measurement is not None:
+            try:
+                return float(raw)
+            except ValueError:
+                return None
+        return raw

@@ -1,4 +1,4 @@
-"""Binary sensors derived from CamStack capability slices."""
+"""Binary sensors built from the components CamStack pushes."""
 
 from __future__ import annotations
 
@@ -6,18 +6,12 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
-from homeassistant.const import EntityCategory
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import (
-    CAP_CAMERA_STREAMS,
-    CAP_DEVICE_STATUS,
-    CAP_MOTION,
-    CAP_PRIVACY_MASK,
-)
-from .coordinator import CamStackConfigEntry, CamStackCoordinator, CamStackDevice
-from .entity import CamStackEntity
+from .coordinator import CamStackConfigEntry
+from .entity import CamStackPushEntity, as_bool
 
 
 async def async_setup_entry(
@@ -25,144 +19,32 @@ async def async_setup_entry(
     entry: CamStackConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Create a motion sensor for every device that carries a motion slice."""
-    coordinator = entry.runtime_data
-    data = coordinator.data
-    if data is None:
-        return
-
-    entities: list[BinarySensorEntity] = []
-    for device in data.devices.values():
-        # The slice is the allowlist. A device type says almost nothing about
-        # what a device can do; the capability it actually carries does.
-        if data.slice_for(device.device_id, CAP_MOTION) is not None:
-            entities.append(CamStackMotionSensor(coordinator, device))
-        if data.slice_for(device.device_id, CAP_DEVICE_STATUS) is not None:
-            entities.append(CamStackConnectivitySensor(coordinator, device))
-        if data.slice_for(device.device_id, CAP_PRIVACY_MASK) is not None:
-            entities.append(CamStackPrivacySensor(coordinator, device))
-        if data.slice_for(device.device_id, CAP_CAMERA_STREAMS) is not None:
-            entities.append(CamStackStreamingSensor(coordinator, device))
-    async_add_entities(entities)
+    """Let the push hub create binary sensors as it learns about them."""
+    entry.runtime_data.push.async_register_platform(
+        Platform.BINARY_SENSOR, CamStackBinarySensor, async_add_entities
+    )
 
 
-class CamStackMotionSensor(CamStackEntity, BinarySensorEntity):
-    """Motion, as reported by the hub's `motion` capability."""
-
-    _attr_device_class = BinarySensorDeviceClass.MOTION
-    _attr_translation_key = "motion"
-
-    def __init__(
-        self, coordinator: CamStackCoordinator, device: CamStackDevice
-    ) -> None:
-        """Bind the sensor to its device."""
-        super().__init__(coordinator, device, "motion")
+class CamStackBinarySensor(CamStackPushEntity, BinarySensorEntity):
+    """A pushed on/off value."""
 
     @property
-    def is_on(self) -> bool | None:
-        """Return whether motion is currently detected."""
-        motion = self.slice_for(CAP_MOTION)
-        if motion is None:
-            return None
-        detected = motion.get("detected")
-        return bool(detected) if isinstance(detected, bool) else None
+    def device_class(self) -> BinarySensorDeviceClass | None:
+        """Return the device class the hub asked for, if HA has it.
 
-
-class CamStackConnectivitySensor(CamStackEntity, BinarySensorEntity):
-    """Whether the hub can currently reach the device."""
-
-    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
-    # Enabled: "is my camera up?" is the single most automated-on question an
-    # operator brings to Home Assistant, and it was the one entity here that
-    # arrived switched off.
-    _attr_translation_key = "reachable"
-
-    def __init__(
-        self, coordinator: CamStackCoordinator, device: CamStackDevice
-    ) -> None:
-        """Bind the sensor to its device."""
-        super().__init__(coordinator, device, "reachable")
-
-    @property
-    def available(self) -> bool:
-        """Stay available while the hub is.
-
-        A reachability sensor that goes unavailable when the device is
-        unreachable can never report the thing it exists to report.
+        An unknown class is dropped rather than raising: the hub adds entities
+        without this component being released, so a class from a newer hub
+        must cost the entity its icon, never its existence.
         """
-        return self.coordinator.last_update_success and self.device is not None
+        raw = self._component.get("device_class")
+        if not isinstance(raw, str):
+            return None
+        try:
+            return BinarySensorDeviceClass(raw)
+        except ValueError:
+            return None
 
     @property
     def is_on(self) -> bool | None:
-        """Return whether the device is online."""
-        status = self.slice_for(CAP_DEVICE_STATUS)
-        if status is None:
-            return None
-        online = status.get("online")
-        return bool(online) if isinstance(online, bool) else None
-
-
-class CamStackPrivacySensor(CamStackEntity, BinarySensorEntity):
-    """Whether a privacy mask is currently active on the device.
-
-    Diagnostic rather than a control: this component reads the state, it does
-    not own it. The switch that changes it is the hub's, surfaced through the
-    camera-switch platform, and a second switch here could disagree with it.
-    """
-
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_translation_key = "privacy"
-
-    def __init__(
-        self, coordinator: CamStackCoordinator, device: CamStackDevice
-    ) -> None:
-        """Bind the sensor to its device."""
-        super().__init__(coordinator, device, "privacy")
-
-    @property
-    def is_on(self) -> bool | None:
-        """Return whether privacy masking is enabled."""
-        privacy = self.slice_for(CAP_PRIVACY_MASK)
-        if privacy is None:
-            return None
-        enabled = privacy.get("enabled")
-        return bool(enabled) if isinstance(enabled, bool) else None
-
-
-class CamStackStreamingSensor(CamStackEntity, BinarySensorEntity):
-    """Whether the hub currently has the camera's streams up.
-
-    Distinct from reachability on purpose: a camera can answer the hub while
-    every stream slot is failing, and that gap is invisible from `online`.
-    """
-
-    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
-    _attr_translation_key = "streaming"
-
-    def __init__(
-        self, coordinator: CamStackCoordinator, device: CamStackDevice
-    ) -> None:
-        """Bind the sensor to its device."""
-        super().__init__(coordinator, device, "streaming")
-
-    @property
-    def is_on(self) -> bool | None:
-        """Return whether the hub reports the camera's streams as up."""
-        streams = self.slice_for(CAP_CAMERA_STREAMS)
-        if streams is None:
-            return None
-        online = streams.get("online")
-        return bool(online) if isinstance(online, bool) else None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, object]:
-        """Expose the per-slot stream status the hub already tracks."""
-        streams = self.slice_for(CAP_CAMERA_STREAMS) or {}
-        statuses = streams.get("slotStatuses")
-        errors = streams.get("slotErrors")
-        return {
-            "slot_statuses": statuses if isinstance(statuses, dict) else {},
-            "slot_errors": errors if isinstance(errors, dict) else {},
-        }
+        """Return the pushed value, or None while nothing has arrived."""
+        return as_bool(self._value, self._component)

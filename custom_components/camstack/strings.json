@@ -89,35 +89,5 @@
         }
       }
     }
-  },
-  "entity": {
-    "binary_sensor": {
-      "motion": {
-        "name": "Motion"
-      },
-      "privacy": {
-        "name": "Privacy mask"
-      },
-      "reachable": {
-        "name": "Reachable"
-      },
-      "streaming": {
-        "name": "Streaming"
-      }
-    },
-    "sensor": {
-      "last_doorbell_press": {
-        "name": "Last doorbell press"
-      },
-      "last_motion": {
-        "name": "Last motion"
-      },
-      "objects": {
-        "name": "Detected objects"
-      },
-      "zone_objects": {
-        "name": "{zone} objects"
-      }
-    }
   }
 }

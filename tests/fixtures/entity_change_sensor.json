@@ -1,0 +1,42 @@
+{
+  "type": "entity_change",
+  "device_id": "camstack-ecowitt:1:tempinf",
+  "dev": {
+    "ids": [
+      "camstack-ecowitt:1:tempinf"
+    ],
+    "name": "Indoor Temperature",
+    "mf": "Ecowitt",
+    "mdl": "GW1100"
+  },
+  "cmps": {
+    "binary_sensor-online": {
+      "platform": "binary_sensor",
+      "unique_id": "ecowitt:1:tempinf_online",
+      "name": "Online",
+      "state_topic": "camstack/camstack-ecowitt:1:tempinf/online",
+      "device_class": "connectivity",
+      "entity_category": "diagnostic",
+      "payload_on": "true",
+      "payload_off": "false"
+    },
+    "sensor-temperature-sensor": {
+      "platform": "sensor",
+      "unique_id": "ecowitt:1:tempinf_temperature_sensor",
+      "name": "Temperature sensor",
+      "state_topic": "camstack/camstack-ecowitt:1:tempinf/temperature_sensor",
+      "device_class": "temperature",
+      "unit_of_measurement": "°C",
+      "enabled_by_default": false
+    },
+    "sensor-battery": {
+      "platform": "sensor",
+      "unique_id": "ecowitt:1:tempinf_battery",
+      "name": "Battery",
+      "state_topic": "camstack/camstack-ecowitt:1:tempinf/battery",
+      "device_class": "battery",
+      "unit_of_measurement": "%",
+      "enabled_by_default": false
+    }
+  }
+}

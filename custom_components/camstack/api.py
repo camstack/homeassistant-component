@@ -4,7 +4,6 @@ The hub speaks tRPC over HTTP:
 
 * query    -> ``GET  /trpc/<path>?input=<urlencoded {"json": <input>}>``
 * mutation -> ``POST /trpc/<path>`` with body ``{"json": <input>}``
-* subscription -> ``GET /trpc/<path>`` with ``Accept: text/event-stream``
 
 Every response is wrapped as ``{"result": {"data": {"json": ...}}}`` or
 ``{"error": {...}}``. This module is the only place that knows that, so no
@@ -23,7 +22,6 @@ import asyncio
 import json
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import quote
 
@@ -33,10 +31,12 @@ _LOGGER = logging.getLogger(__name__)
 
 # A tRPC error object carries a numeric JSON-RPC-ish code; -32001 is UNAUTHORIZED.
 _TRPC_UNAUTHORIZED = -32001
+# -32600 is BAD_REQUEST. On an input this component supplies from its own
+# constants — an `addonId` pin, say — the hub refusing it can never be fixed by
+# asking again, so it is a different failure from "the hub is busy".
+_TRPC_BAD_REQUEST = -32600
 
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
-# The stream is long-lived: only the connect and the socket-read matter.
-_STREAM_TIMEOUT = aiohttp.ClientTimeout(total=None, connect=30, sock_read=300)
 
 
 class CamStackError(Exception):
@@ -53,6 +53,17 @@ class CamStackAuthError(CamStackError):
 
 class CamStackApiError(CamStackError):
     """The hub answered, and the answer was an error."""
+
+
+class CamStackRequestError(CamStackApiError):
+    """The hub REFUSED the request itself, and retrying cannot change that.
+
+    The case this exists for: a capability pinned to an `addonId` the hub does
+    not have. The hub answers with the valid ids enumerated rather than
+    quietly serving the request from another provider — so the message is
+    worth surfacing to the operator verbatim, and treating it as a transient
+    connection problem would hide a broken integration behind an empty one.
+    """
 
 
 def base_url_for(host: str, port: int) -> str:
@@ -162,6 +173,22 @@ class CamStackClient:
         """Return the hub's root URL."""
         return base_url_for(self._host, self._port)
 
+    @property
+    def session(self) -> aiohttp.ClientSession:
+        """Return the HTTP session, for callers fetching hub-minted URLs.
+
+        An image entity needs it: the picture link the hub mints points at the
+        hub itself, so it has to be fetched under the SAME TLS setting as
+        every other call. Home Assistant's shared session verifies, and a hub
+        with a self-signed certificate would then serve broken images only.
+        """
+        return self._session
+
+    @property
+    def verify_ssl(self) -> bool:
+        """Return whether this entry verifies the hub's certificate."""
+        return self._verify_ssl
+
     async def async_verify(self) -> dict[str, Any]:
         """Obtain a token and confirm the hub accepts it. Used by the flow."""
         await self._auth.async_token()
@@ -177,6 +204,51 @@ class CamStackClient:
     async def mutate(self, path: str, payload: Any | None = None) -> Any:
         """Call a tRPC mutation."""
         return await self._authenticated_request("POST", path, payload)
+
+    async def async_post_addon_route(self, path: str, payload: Any) -> Any:
+        """POST to an addon's own HTTP route.
+
+        Not tRPC. Commands travel Home Assistant -> CamStack on the export
+        addon's `addon-routes` surface, which is a plain authenticated
+        endpoint answering `{"error": ...}` with a 4xx when it refuses a
+        command rather than pretending to have applied it.
+        """
+        token = await self._auth.async_token()
+        try:
+            return await self._post_route(path, payload, token=token)
+        except CamStackAuthError:
+            token = await self._auth.async_renew()
+            return await self._post_route(path, payload, token=token)
+
+    async def _post_route(self, path: str, payload: Any, *, token: str) -> Any:
+        """Perform one addon-route POST and raise on anything but success."""
+        url = f"{self.base_url}{path}"
+        try:
+            async with self._session.post(
+                url,
+                headers={
+                    "content-type": "application/json",
+                    "authorization": f"Bearer {token}",
+                },
+                data=json.dumps(payload),
+                ssl=self._verify_ssl,
+                timeout=_REQUEST_TIMEOUT,
+            ) as response:
+                if response.status in (401, 403):
+                    raise CamStackAuthError(f"{path}: hub rejected the token")
+                status = response.status
+                text = await response.text()
+        except TimeoutError as err:
+            raise CamStackConnectionError(f"{path}: timed out") from err
+        except aiohttp.ClientError as err:
+            raise CamStackConnectionError(f"{path}: {err}") from err
+
+        if status >= 400:
+            raise CamStackApiError(f"{path}: hub answered {status} {text.strip()}")
+        try:
+            return json.loads(text) if text else None
+        except json.JSONDecodeError:
+            return None
 
     async def _authenticated_request(
         self, method: str, path: str, payload: Any | None
@@ -209,55 +281,6 @@ class CamStackClient:
             token=token,
             verify_ssl=self._verify_ssl,
         )
-
-    async def subscribe_events(
-        self, category: str | None = None
-    ) -> AsyncIterator[dict[str, Any]]:
-        """Yield live hub events from a tRPC SSE subscription.
-
-        The caller owns the retry loop: this generator ends when the stream
-        ends, and never reconnects behind the caller's back.
-        """
-        token = await self._auth.async_token()
-
-        payload: dict[str, Any] = {"category": category} if category else {}
-        url = (
-            f"{self.base_url}/trpc/live.onEvent"
-            f"?input={quote(json.dumps({'json': payload}))}"
-        )
-        headers = {
-            "accept": "text/event-stream",
-            "authorization": f"Bearer {token}",
-            # MEASURED, not defensive. aiohttp advertises gzip by default and
-            # the hub honours it on `text/event-stream`, which then only
-            # reaches the client when the compressor's buffer fills. On a
-            # busy unfiltered stream that looks like it works; on a filtered
-            # one (~7 events/s) it delivered ZERO events in 8 seconds while
-            # the same request under `identity` delivered 56. Motion would
-            # have arrived in late bursts, or not at all.
-            "accept-encoding": "identity",
-        }
-
-        try:
-            async with self._session.get(
-                url, headers=headers, ssl=self._verify_ssl, timeout=_STREAM_TIMEOUT
-            ) as response:
-                if response.status in (401, 403):
-                    # The caller owns the retry loop and will come back through
-                    # `async_token`; renewing here would race it.
-                    raise CamStackAuthError("event stream: hub rejected the token")
-                if response.status != 200:
-                    raise CamStackApiError(
-                        f"event stream: hub answered {response.status}"
-                    )
-                async for raw_line in response.content:
-                    event = _parse_sse_line(raw_line)
-                    if event is not None:
-                        yield event
-        except TimeoutError as err:
-            raise CamStackConnectionError("event stream: timed out") from err
-        except aiohttp.ClientError as err:
-            raise CamStackConnectionError(f"event stream: {err}") from err
 
 
 async def trpc_request(
@@ -307,25 +330,6 @@ async def trpc_request(
     return _unwrap(path, text)
 
 
-def _parse_sse_line(raw_line: bytes) -> dict[str, Any] | None:
-    """Return the event carried by one SSE line, or None for framing lines."""
-    line = raw_line.decode("utf-8", errors="replace").strip()
-    if not line.startswith("data:"):
-        return None
-    data = line[len("data:") :].strip()
-    if not data:
-        return None
-    try:
-        parsed = json.loads(data)
-    except json.JSONDecodeError:
-        _LOGGER.debug("Discarding unparsable event frame: %s", data[:200])
-        return None
-    # The hub serialises through a superjson-style envelope; the payload is
-    # under `json` and `meta` only describes revived types we do not need.
-    event = parsed.get("json") if isinstance(parsed, dict) else None
-    return event if isinstance(event, dict) else None
-
-
 def _unwrap(path: str, text: str) -> Any:
     """Unwrap a tRPC response envelope, raising on the error branch."""
     try:
@@ -341,6 +345,8 @@ def _unwrap(path: str, text: str) -> Any:
         message, code = _describe_error(error)
         if code == _TRPC_UNAUTHORIZED:
             raise CamStackAuthError(f"{path}: {message}")
+        if code == _TRPC_BAD_REQUEST:
+            raise CamStackRequestError(f"{path}: {message}")
         raise CamStackApiError(f"{path}: {message}")
 
     result = parsed.get("result")

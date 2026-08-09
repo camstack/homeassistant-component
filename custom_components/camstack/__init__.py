@@ -1,10 +1,11 @@
 """The CamStack integration.
 
-One component, two surfaces, one config entry:
+One component, three surfaces, one config entry:
 
 * the **sidebar panel and the Lovelace card**, which need only the hub's
   address and are set up first;
-* the **entities**, which need credentials.
+* the **pushed entities**, which the hub builds and this component renders;
+* the **camera entities**, the one thing the push cannot carry.
 
 They are deliberately not all-or-nothing. An entry created by the panel-only
 component this one replaces has an address but no credentials, and it must keep
@@ -29,16 +30,26 @@ from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import CamStackAuth, CamStackClient, PasswordAuth
 from .const import CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL, DOMAIN
-from .coordinator import CamStackConfigEntry, CamStackCoordinator
+from .coordinator import (
+    CamStackConfigEntry,
+    CamStackCoordinator,
+    CamStackRuntimeData,
+)
 from .frontend import async_remove_panel, async_setup_frontend
 from .migration import async_migrate_entry, entry_has_credentials, entry_is_oauth
 from .oauth import CamStackOAuth2Implementation, OAuth2Auth
+from .push import CamStackPushHub
+from .push_view import async_register_push_view, async_unregister_push_hub
 
 __all__ = ["async_migrate_entry"]
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
+    Platform.BUTTON,
     Platform.CAMERA,
+    Platform.IMAGE,
+    Platform.NUMBER,
+    Platform.SELECT,
     Platform.SENSOR,
     Platform.SWITCH,
 ]
@@ -65,20 +76,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: CamStackConfigEntry) -> 
         verify_ssl=verify_ssl,
     )
 
+    push = CamStackPushHub(hass, entry, client)
+    # The structure and the last values the hub pushed, from disk. Without
+    # them every entity would sit blank between a restart and the hub's next
+    # reconcile, which is up to five minutes away.
+    await push.async_load()
+
     coordinator = CamStackCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
-    entry.runtime_data = coordinator
+    entry.runtime_data = CamStackRuntimeData(
+        client=client, push=push, coordinator=coordinator
+    )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    # Started only after the platforms exist, so the first event has entities
-    # to wake rather than landing on an empty registry.
-    coordinator.start_event_stream()
+    # Only now: a push arriving before the platforms exist has nowhere to put
+    # an entity, and the hub would have deduped the value it carried.
+    push.async_start()
+    async_register_push_view(hass, push)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: CamStackConfigEntry) -> bool:
     """Unload a config entry."""
     async_remove_panel(hass, entry.entry_id)
+    async_unregister_push_hub(hass, entry.entry_id)
+    runtime = getattr(entry, "runtime_data", None)
+    if isinstance(runtime, CamStackRuntimeData):
+        runtime.push.async_stop()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 

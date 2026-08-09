@@ -1,45 +1,29 @@
-"""Export membership decides what the integration imports.
+"""Export membership decides which cameras the integration builds.
 
-The integration used to call `deviceManager.listAll` and build entities for
-everything it returned. On the operator's cluster that is ~300 devices, of
-which a handful were meant to reach Home Assistant. Membership belongs to the
-`device-export` capability — the same interface the Alexa and HomeKit exporters
-implement — and this file pins that it is read and honoured.
+Every VALUE now arrives by push, so this is no longer what creates entities in
+general — the hub only ever pushes devices it exports. What it still decides
+is the live camera, which the push cannot carry, and it remains the place a
+wrong `addonId` would import somebody else's selection.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock
 
+import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.camstack.api import CamStackRequestError, _unwrap
 from custom_components.camstack.const import HA_EXPORT_ADDON_ID
 
-from .conftest import DEVICE_LIST, ME, SNAPSHOTS, SWITCH_GROUP
-from .test_entities import setup_integration
-
-
-def _responder(exposed: list[dict[str, Any]]) -> Any:
-    """Return a hub responder whose export list is `exposed`."""
-
-    async def respond(path: str, payload: Any | None = None) -> Any:
-        if path == "deviceExport.listExposedDevices":
-            return exposed
-        if path == "deviceManager.listAll":
-            return DEVICE_LIST
-        if path == "deviceState.getAllSnapshots":
-            return SNAPSHOTS
-        if path == "pipelineOrchestrator.getCameraSwitches":
-            return SWITCH_GROUP
-        if path == "auth.me":
-            return ME
-        if path == "snapshot.getSnapshot":
-            return {"base64": "/9j/4AAQ", "contentType": "image/jpeg"}
-        raise AssertionError(f"unexpected query: {path}")
-
-    return respond
+from .conftest import (
+    UNRESOLVABLE_ADDON_ERROR,
+    make_query_responder,
+    setup_integration,
+)
 
 
 async def test_membership_is_read_from_the_export_capability(
@@ -57,52 +41,43 @@ async def test_membership_is_read_from_the_export_capability(
     assert exports[0][1] == {"addonId": HA_EXPORT_ADDON_ID}
 
 
-async def test_only_exported_devices_become_entities(
+async def test_only_exported_devices_are_resolved(
     hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
 ) -> None:
-    """A device the hub returns but does not export creates nothing.
+    """289 and 290 are in `deviceManager.listAll` and not in the export list."""
+    runtime = await setup_integration(hass, config_entry)
 
-    289 and 290 are in `deviceManager.listAll` and NOT in the export list.
-    """
-    coordinator = await setup_integration(hass, config_entry)
-
-    assert set(coordinator.data.devices) == {615, 585, 291}
-    # The unexported parents are still known — grouping needs the chain.
-    assert {289, 290} <= set(coordinator.data.topology)
-    assert hass.states.get("sensor.ecowitt_gateway_gateway_indoor_temperature")
-    assert hass.states.get("binary_sensor.ecowitt_gateway_reachable") is None
+    assert set(runtime.coordinator.data.devices) == {615, 585, 291}
 
 
-async def test_an_empty_export_list_creates_no_entities(
+async def test_an_empty_export_list_creates_no_camera(
     hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
 ) -> None:
     """Exporting nothing means importing nothing — never everything.
 
-    This is the regression that matters: the failure mode being fixed is a
-    fallback that treats "no selection" as "take them all".
+    The failure mode being guarded is a fallback that reads "no selection" as
+    "take them all"; on the operator's cluster that is 132 devices.
     """
-    mock_client.query = AsyncMock(side_effect=_responder([]))
+    mock_client.query = AsyncMock(side_effect=make_query_responder([]))
 
-    coordinator = await setup_integration(hass, config_entry)
+    runtime = await setup_integration(hass, config_entry)
 
-    assert coordinator.data.devices == {}
+    assert runtime.coordinator.data.devices == {}
     assert hass.states.get("camera.videocamera_ingresso") is None
-    assert hass.states.get("binary_sensor.videocamera_ingresso_motion") is None
 
 
 async def test_exporting_one_camera_imports_only_that_camera(
     hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
 ) -> None:
     """Narrowing the hub's selection narrows what Home Assistant receives."""
-    mock_client.query = AsyncMock(side_effect=_responder([{"deviceId": "615"}]))
+    mock_client.query = AsyncMock(
+        side_effect=make_query_responder([{"deviceId": "615"}])
+    )
 
-    coordinator = await setup_integration(hass, config_entry)
+    runtime = await setup_integration(hass, config_entry)
 
-    assert set(coordinator.data.devices) == {615}
+    assert set(runtime.coordinator.data.devices) == {615}
     assert hass.states.get("camera.videocamera_ingresso") is not None
-    # 291 is a live hub device carrying a temperature slice. It is absent only
-    # because it is not exported.
-    assert hass.states.get("sensor.ecowitt_gateway_gateway_indoor_temperature") is None
 
 
 async def test_a_string_device_id_still_matches_an_int_one(
@@ -115,29 +90,33 @@ async def test_a_string_device_id_still_matches_an_int_one(
     exactly like an empty selection — a bug that would pass every other test
     in this file while importing nothing on a real hub.
     """
-    mock_client.query = AsyncMock(side_effect=_responder([{"deviceId": "615"}]))
+    mock_client.query = AsyncMock(
+        side_effect=make_query_responder([{"deviceId": "615"}])
+    )
 
-    coordinator = await setup_integration(hass, config_entry)
+    runtime = await setup_integration(hass, config_entry)
 
-    assert 615 in coordinator.data.devices
+    assert 615 in runtime.coordinator.data.devices
 
 
-async def test_a_failed_export_read_does_not_silently_import_everything(
+async def test_the_alexa_and_homekit_selections_are_not_imported(
     hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
 ) -> None:
-    """A malformed answer is not an answer, and must not open the gate."""
+    """Only the Home Assistant provider's list counts.
 
-    async def respond(path: str, payload: Any | None = None) -> Any:
-        if path == "deviceExport.listExposedDevices":
-            return {"unexpected": "shape"}
-        return await _responder([])(path, payload)
+    Alexa and HomeKit each export three cameras; Home Assistant exports none.
+    The correct outcome is zero cameras. An implementation that reads the
+    merged collection imports all three and looks entirely healthy doing it —
+    which is indistinguishable, from the operator's side, from the bug this
+    whole change exists to fix.
+    """
+    mock_client.query = AsyncMock(side_effect=make_query_responder([]))
 
-    mock_client.query = AsyncMock(side_effect=respond)
-    config_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
+    runtime = await setup_integration(hass, config_entry)
 
-    assert hass.states.get("camera.videocamera_ingresso") is None
+    assert runtime.coordinator.data.devices == {}
+    # 615 is exposed to Alexa AND to HomeKit, and to Home Assistant by neither.
+    assert 615 not in runtime.coordinator.data.devices
 
 
 async def test_an_exported_device_from_home_assistant_is_still_refused(
@@ -148,71 +127,76 @@ async def test_an_exported_device_from_home_assistant_is_still_refused(
     Exporting an HA-sourced device back to HA mirrors it across the bridge, so
     a selection that asks for it is refused rather than honoured.
     """
-    mock_client.query = AsyncMock(side_effect=_responder([{"deviceId": "1027"}]))
+    mock_client.query = AsyncMock(
+        side_effect=make_query_responder([{"deviceId": "1027"}])
+    )
 
-    coordinator = await setup_integration(hass, config_entry)
+    runtime = await setup_integration(hass, config_entry)
 
-    assert 1027 not in coordinator.data.devices
-
-
-# `device-export` is a COLLECTION capability: called without an `addonId` the
-# hub merges every export provider's list into one array. On the live cluster
-# that aggregate is the Alexa export's 3 devices plus the HomeKit export's 3,
-# while the Home Assistant provider's own list is empty. Reading the aggregate
-# therefore yields a filter that LOOKS like it works while honouring the wrong
-# authority — the operator would receive whatever they had exposed to Alexa and
-# HomeKit. This is D12 ("per-device aggregation never walks the global cap
-# list") applied to the read side.
-#
-# Recorded from the live hub on 2026-08-08.
-AGGREGATE_EXPOSED: list[dict[str, Any]] = [
-    {"deviceId": "615"},
-    {"deviceId": "590"},
-    {"deviceId": "587"},
-    {"deviceId": "587", "exposedAs": "Videocamera cucina DAF2"},
-    {"deviceId": "615", "exposedAs": "Videocamera ingresso ACBD"},
-    {"deviceId": "590", "exposedAs": "Videocamera salone 822D"},
-]
+    assert 1027 not in runtime.coordinator.data.devices
 
 
-def _provider_aware_responder() -> Any:
-    """Return a responder that answers `listExposedDevices` per provider.
+async def test_a_malformed_export_answer_does_not_open_the_gate(
+    hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
+) -> None:
+    """A malformed answer is not an answer, and must not import everything."""
 
-    This is the shape the hub actually has: an unpinned call merges every
-    exporter, a pinned one answers for that exporter alone.
+    async def respond(path: str, payload: Any | None = None) -> Any:
+        if path == "deviceExport.listExposedDevices":
+            return {"unexpected": "shape"}
+        return await make_query_responder()(path, payload)
+
+    mock_client.query = AsyncMock(side_effect=respond)
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("camera.videocamera_ingresso") is None
+
+
+async def test_an_unresolvable_pin_fails_setup_with_the_hubs_own_message(
+    hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
+) -> None:
+    """A refused `addonId` must not be flattened into "nothing is exported".
+
+    The hub refuses an unresolvable pin and names every provider that DOES
+    exist, rather than quietly answering from one of them. That message is the
+    fix instruction, and swallowing it produces the single most expensive
+    outcome here: a broken integration that looks exactly like an empty one.
+
+    The refusal recorded in `UNRESOLVABLE_ADDON_ERROR` is the one the live hub
+    returns today for the retired `export-ha-mqtt` id.
     """
 
     async def respond(path: str, payload: Any | None = None) -> Any:
         if path == "deviceExport.listExposedDevices":
-            addon_id = (payload or {}).get("addonId")
-            if addon_id is None:
-                return AGGREGATE_EXPOSED
-            if addon_id == HA_EXPORT_ADDON_ID:
-                # Nothing is exposed to Home Assistant, which is the live
-                # state today.
-                return []
-            return AGGREGATE_EXPOSED
-        return await _responder([])(path, payload)
+            message = UNRESOLVABLE_ADDON_ERROR["json"]["message"]
+            raise CamStackRequestError(f"{path}: {message}")
+        return await make_query_responder()(path, payload)
 
-    return respond
+    mock_client.query = AsyncMock(side_effect=respond)
+    config_entry.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
 
-
-async def test_the_alexa_and_homekit_selections_are_not_imported(
-    hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
-) -> None:
-    """Only the Home Assistant provider's list counts.
-
-    Alexa and HomeKit each export three cameras; Home Assistant exports none.
-    The correct outcome is zero entities. An implementation that reads the
-    merged collection imports all three and looks entirely healthy doing it —
-    which is indistinguishable, from the operator's side, from the bug this
-    whole change exists to fix.
-    """
-    mock_client.query = AsyncMock(side_effect=_provider_aware_responder())
-
-    coordinator = await setup_integration(hass, config_entry)
-
-    assert coordinator.data.devices == {}
+    assert config_entry.state is not None
+    reason = config_entry.reason or ""
+    assert "has no provider with addonId" in reason
+    # The list of valid ids is the actionable half of the message.
+    assert "homeassistant-export" in reason
     assert hass.states.get("camera.videocamera_ingresso") is None
-    # 615 is exposed to Alexa AND to HomeKit, and to Home Assistant by neither.
-    assert 615 not in coordinator.data.devices
+
+
+def test_a_bad_request_is_its_own_error() -> None:
+    """A 400 from the hub is not a connection problem, and is typed apart.
+
+    Retrying cannot change the answer to a request the hub refused on its
+    input; treating it as transient is how it ends up retried forever behind a
+    generic "cannot connect".
+    """
+    with pytest.raises(CamStackRequestError) as excinfo:
+        _unwrap(
+            "deviceExport.listExposedDevices",
+            json.dumps({"error": UNRESOLVABLE_ADDON_ERROR}),
+        )
+    assert "Valid addonId(s)" in str(excinfo.value)

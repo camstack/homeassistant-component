@@ -57,30 +57,79 @@ PANEL_FILENAME: Final = "camstack-panel.js"
 CARD_FILENAME: Final = "camstack-grid-card.js"
 CONFIG_VIEW_URL: Final = "/api/camstack/config"
 
-# The event stream is the live path; this reconcile exists because events are
-# telemetry and may be dropped. It is a correctness backstop, not the feed.
-RECONCILE_INTERVAL: Final = timedelta(seconds=60)
-
-# Capability slice names the integration reads. Kept as constants because they
-# are wire identifiers, not free text.
-CAP_DEVICE_STATUS: Final = "device-status"
-CAP_MOTION: Final = "motion"
-CAP_DOORBELL: Final = "doorbell"
-CAP_BATTERY: Final = "battery"
-CAP_ZONE_ANALYTICS: Final = "zone-analytics"
-CAP_AUDIO_METRICS: Final = "audio-metrics"
-CAP_PRIVACY_MASK: Final = "privacy-mask"
-CAP_CAMERA_STREAMS: Final = "camera-streams"
-
-# The hub addon that owns per-device Home Assistant export membership. It is
-# a `device-export` provider, exactly like the Alexa and HomeKit exporters,
-# and its exposed list is the ONLY per-device "export this to Home Assistant"
-# authority the hub has. The id says `mqtt` for historical reasons — the addon
-# also drives MQTT discovery — but the list names DEVICES, not topics, and
-# applies with or without a broker.
-HA_EXPORT_ADDON_ID: Final = "export-ha-mqtt"
-
-# tRPC event category carrying `{deviceId, capName, slice}`.
-EVENT_DEVICE_STATE_CHANGED: Final = "device.state-changed"
-
 MANUFACTURER: Final = "CamStack"
+
+# --- The push transport ----------------------------------------------------
+#
+# CamStack PUSHES. Nothing in Home Assistant polls the hub for a value. The
+# hub's `homeassistant-export` addon POSTs to the view below, behind Home
+# Assistant's own authentication, and every constant here is matched verbatim
+# against `packages/addon-provider-homeassistant/src/ha-export/` on the hub.
+
+# Where `push-client.ts` sends. It is a wire format: change it and the hub
+# POSTs into a 404 forever, with nothing in Home Assistant's log to say so.
+PUSH_VIEW_URL: Final = "/api/camstack/push"
+
+# Commands travel the other way, onto the export addon's `addon-routes`
+# surface: POST {topic, value}, Bearer-authenticated with the hub token this
+# entry already holds.
+COMMAND_ROUTE_PATH: Final = "/addon/homeassistant-export/command"
+
+# The `device-export` provider that owns Home Assistant export membership.
+#
+# The pin is MANDATORY. `device-export` is a COLLECTION capability, so an
+# unpinned read merges every export provider — Alexa's devices and HomeKit's
+# would arrive as ours. An unresolvable id is REFUSED by the hub with the
+# valid ids enumerated (never answered from another provider), which is why a
+# wrong pin here fails loudly instead of importing the wrong set.
+HA_EXPORT_ADDON_ID: Final = "homeassistant-export"
+
+# Where an operator turns a device on for Home Assistant. Quoted verbatim in
+# the warning logged when nothing is exported, because "no entities" and
+# "broken integration" look identical from Home Assistant's side.
+EXPORT_PANEL_HINT: Final = (
+    "CamStack admin UI -> the device -> Export tab -> Home Assistant Export"
+)
+
+# `deviceKeyFor()` on the hub. The HA device identifier is the hub's
+# `device_id`, so a camera's pushed entities and its camera entity land on the
+# SAME Home Assistant device instead of two that look like duplicates.
+DEVICE_KEY_PREFIX: Final = "camstack-"
+
+# The hub's heartbeat cadence (`HEARTBEAT_INTERVAL_MS`). It doubles as the
+# availability signal, and it is the ONLY one: there is deliberately no second
+# source that could disagree about whether camstack is alive.
+HEARTBEAT_INTERVAL: Final = timedelta(seconds=30)
+# Three missed heartbeats. Tight enough to notice, loose enough to survive one
+# slow reconcile on a busy hub.
+HEARTBEAT_TIMEOUT: Final = timedelta(seconds=95)
+LINK_CHECK_INTERVAL: Final = timedelta(seconds=15)
+
+# Above `MAX_VALUE_CHARS` the hub collapses a value to this signal. Images are
+# always a signed URL, so this is the backstop for anything that grew
+# unexpectedly — never the normal path for a picture.
+IMAGE_SIGNAL_PREFIX: Final = "__image_updated__:"
+
+# An image entity fetches bytes over HTTP from a signed, expiring URL. The URL
+# changes per detection, so this floor is what stops a busy camera turning
+# every track into a round trip.
+MIN_IMAGE_FETCH_INTERVAL: Final = timedelta(seconds=10)
+
+# Structure and last values survive a Home Assistant restart here. Without it
+# every entity would be "restored" and blank until the hub's next reconcile,
+# which is up to five minutes away.
+STORAGE_KEY: Final = "camstack.push"
+STORAGE_VERSION: Final = 1
+STORAGE_SAVE_DELAY: Final = 30
+
+# Membership is structure, not value, so it is read on a slow timer rather
+# than polled: the hub announces entities, and this only decides which cameras
+# get a `camera` entity (the one thing the push catalog does not carry).
+MEMBERSHIP_INTERVAL: Final = timedelta(minutes=5)
+
+# Per-entry dispatcher signals. One per topic, so a state update wakes exactly
+# the entity that owns it — across ~880 entities the alternative is a storm.
+SIGNAL_ADD_ENTITIES: Final = "camstack_add_{entry_id}_{platform}"
+SIGNAL_STATE: Final = "camstack_state_{entry_id}_{topic}"
+SIGNAL_STRUCTURE: Final = "camstack_structure_{entry_id}"
+SIGNAL_LINK: Final = "camstack_link_{entry_id}"

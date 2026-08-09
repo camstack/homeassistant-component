@@ -1,11 +1,15 @@
 """Camera entities backed by a CamStack hub.
 
-Stills come from the `snapshot` capability. Live video is **native WebRTC**:
-the hub's `webrtc-session` capability takes a browser offer and answers it
-directly, so the stream is not re-encoded and Home Assistant needs no
-intermediate `stream` worker. That is the whole reason this integration talks
-to the hub API rather than consuming an RTSP URL — the hub already owns the
-adaptive ladder, and going around it would pick a profile twice.
+The one entity that does NOT come over the push transport. Stills come from
+the `snapshot` capability and live video is **native WebRTC**: the hub's
+`webrtc-session` capability takes a browser offer and answers it directly, so
+the stream is not re-encoded and Home Assistant needs no intermediate `stream`
+worker. Both are addressed by the hub's numeric device id, which the push
+never carries — which is why membership is still read from the hub.
+
+The entity joins the SAME Home Assistant device as the camera's pushed
+entities, keyed on the hub's `device_id`. Anything else would put the live
+view on a second device sitting next to the sensors it belongs with.
 """
 
 from __future__ import annotations
@@ -24,13 +28,14 @@ from homeassistant.components.camera.webrtc import (
     WebRTCSendMessage,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from webrtc_models import RTCIceCandidate, RTCIceCandidateInit
 
 from .api import CamStackError
-from .const import CAP_DEVICE_STATUS
+from .const import DOMAIN, MANUFACTURER
 from .coordinator import CamStackConfigEntry, CamStackCoordinator, CamStackDevice
-from .entity import CamStackEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,18 +50,30 @@ async def async_setup_entry(
     entry: CamStackConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up one camera entity per CamStack camera."""
-    coordinator = entry.runtime_data
-    if coordinator.data is None:
-        return
-    async_add_entities(
-        CamStackCamera(coordinator, device) for device in coordinator.data.cameras()
-    )
+    """Set up one camera entity per exported camera, now and later."""
+    coordinator = entry.runtime_data.coordinator
+    known: set[int] = set()
+
+    @callback
+    def _async_add_new() -> None:
+        """Add entities for cameras exported since the last read."""
+        data = coordinator.data
+        if data is None:
+            return
+        fresh = [camera for camera in data.cameras() if camera.device_id not in known]
+        if not fresh:
+            return
+        known.update(camera.device_id for camera in fresh)
+        async_add_entities(CamStackCamera(coordinator, camera) for camera in fresh)
+
+    _async_add_new()
+    entry.async_on_unload(coordinator.async_add_listener(_async_add_new))
 
 
-class CamStackCamera(CamStackEntity, Camera):
+class CamStackCamera(CoordinatorEntity[CamStackCoordinator], Camera):
     """A CamStack camera, with stills and native WebRTC live video."""
 
+    _attr_has_entity_name = True
     _attr_name = None
     _attr_supported_features = CameraEntityFeature.STREAM
 
@@ -64,17 +81,41 @@ class CamStackCamera(CamStackEntity, Camera):
         self, coordinator: CamStackCoordinator, device: CamStackDevice
     ) -> None:
         """Build the entity and prepare its WebRTC session bookkeeping."""
-        CamStackEntity.__init__(self, coordinator, device, "camera")
+        CoordinatorEntity.__init__(self, coordinator)
         Camera.__init__(self)
+        self._device_id = device.device_id
+        self._device_key = device.device_key
+        # Derived from the stable id, like every other entity the hub exports:
+        # a numeric id is reallocated by a re-sync, and an entity keyed on one
+        # would follow whichever camera inherited the number.
+        self._attr_unique_id = f"{DOMAIN}_{device.stable_id}_camera"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device.device_key)},
+            name=device.name,
+            manufacturer=MANUFACTURER,
+        )
         # Home Assistant's session id is not the hub's; the map is what lets a
         # close or a candidate from the frontend reach the right hub session.
         self._hub_sessions: dict[str, str] = {}
         self._ice_tasks: dict[str, asyncio.Task[None]] = {}
 
     @property
+    def _device(self) -> CamStackDevice | None:
+        """Return the current record for this camera."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.devices.get(self._device_id)
+
+    @property
+    def available(self) -> bool:
+        """Report a camera the hub disabled as unavailable, not as idle."""
+        device = self._device
+        return super().available and device is not None and not device.disabled
+
+    @property
     def is_on(self) -> bool:
         """Return whether the camera is switched on at the hub."""
-        device = self.device
+        device = self._device
         return device is not None and not device.disabled
 
     async def async_camera_image(
@@ -214,11 +255,10 @@ class CamStackCamera(CamStackEntity, Camera):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Expose the hub's device id, which every hub log line is keyed on."""
-        attributes: dict[str, Any] = {"camstack_device_id": self._device_id}
-        status = self.slice_for(CAP_DEVICE_STATUS)
-        if status is not None and "lastChangedAt" in status:
-            attributes["last_changed_at"] = status["lastChangedAt"]
-        return attributes
+        return {
+            "camstack_device_id": self._device_id,
+            "camstack_device_key": self._device_key,
+        }
 
 
 def _to_ha_candidate(entry: dict[str, Any]) -> RTCIceCandidateInit:
