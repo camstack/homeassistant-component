@@ -13,16 +13,30 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.camstack.api import CamStackRequestError, _unwrap
+from custom_components.camstack.api import (
+    CamStackForbiddenError,
+    CamStackRequestError,
+    _unwrap,
+)
 from custom_components.camstack.const import HA_EXPORT_ADDON_ID
 
 from .conftest import (
     UNRESOLVABLE_ADDON_ERROR,
     make_query_responder,
     setup_integration,
+)
+
+# The hub's verbatim refusal for a `homeassistant` link whose grant predates the
+# `device-export` scope — the sentence the operator has to be shown.
+SCOPE_REFUSAL = (
+    "No scope grants view on 'device-export' (system-scope cap). "
+    "Have: category:device[view,create], capability:device-manager[view], "
+    "capability:device-state[view], capability:pipeline-orchestrator[view,create], "
+    "addon:homeassistant-export[view,create]"
 )
 
 
@@ -185,6 +199,61 @@ async def test_an_unresolvable_pin_fails_setup_with_the_hubs_own_message(
     # The list of valid ids is the actionable half of the message.
     assert "homeassistant-export" in reason
     assert hass.states.get("camera.videocamera_ingresso") is None
+
+
+async def test_a_refused_grant_fails_setup_instead_of_asking_for_a_relink(
+    hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
+) -> None:
+    """The link is VALID. Sending the operator to reauth is the wrong answer.
+
+    Live failure, 2026-08-09: the operator linked Home Assistant, the hub
+    minted a token, and the very first authenticated call — this one — came
+    back `403 FORBIDDEN` because the grant behind the link did not include
+    `device-export`. Home Assistant reported "authentication expired", the
+    operator re-linked, the new token carried the identical grant, and it
+    failed again 25 seconds later. Three unrevoked sessions later the hub had
+    still never rejected a credential.
+
+    So: a refusal is a permanent setup error carrying the hub's own sentence,
+    and it must NOT raise `ConfigEntryAuthFailed`. Reauth is for a credential
+    that stopped working; nothing about this one ever did.
+    """
+
+    async def respond(path: str, payload: Any | None = None) -> Any:
+        if path == "deviceExport.listExposedDevices":
+            raise CamStackForbiddenError(f"{path}: {SCOPE_REFUSAL}")
+        return await make_query_responder()(path, payload)
+
+    mock_client.query = AsyncMock(side_effect=respond)
+    config_entry.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert config_entry.state is ConfigEntryState.SETUP_ERROR
+    reason = config_entry.reason or ""
+    assert "No scope grants view on 'device-export'" in reason
+    # No reauth flow: re-linking mints the same grant and fails identically.
+    assert not [
+        flow
+        for flow in hass.config_entries.flow.async_progress()
+        if flow["context"].get("source") == SOURCE_REAUTH
+    ]
+
+
+def test_a_forbidden_is_not_a_bad_request() -> None:
+    """403 and 400 are both permanent, and they are not the same permanent.
+
+    A bad request is the component's own input being wrong; a forbidden is the
+    operator's grant being too narrow. They read differently and they are
+    fixed differently, so they are typed apart.
+    """
+    with pytest.raises(CamStackForbiddenError) as excinfo:
+        _unwrap(
+            "deviceExport.listExposedDevices",
+            json.dumps({"error": {"json": {"message": SCOPE_REFUSAL, "code": -32003}}}),
+        )
+    assert not isinstance(excinfo.value, CamStackRequestError)
+    assert "device-export" in str(excinfo.value)
 
 
 def test_a_bad_request_is_its_own_error() -> None:

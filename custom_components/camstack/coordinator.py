@@ -35,6 +35,7 @@ from .api import (
     CamStackAuthError,
     CamStackClient,
     CamStackError,
+    CamStackForbiddenError,
     CamStackRequestError,
 )
 from .const import (
@@ -151,6 +152,18 @@ class CamStackCoordinator(DataUpdateCoordinator[CamStackData]):
         try:
             exported = await self._async_fetch_exported_ids()
             listing = await self.client.query("deviceManager.listAll", {})
+        except CamStackForbiddenError as err:
+            # The token is VALID and the grant behind the link is too narrow.
+            # `ConfigEntryAuthFailed` here would send the operator to reauth,
+            # where re-linking mints a token with the identical grant and the
+            # next call fails identically — the loop that produced three live
+            # sessions on 2026-08-09. A permanent setup error carrying the
+            # hub's own sentence is the only honest answer.
+            raise ConfigEntryError(
+                f"{err}. The link itself is valid — re-linking mints the same "
+                "grant. The hub has to offer the missing one first, which "
+                "means updating CamStack, and only then re-linking"
+            ) from err
         except CamStackRequestError as err:
             # The hub refused the request itself. Asking again cannot change
             # the answer, and reporting it as "no devices" would hide it.

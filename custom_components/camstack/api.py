@@ -35,6 +35,10 @@ _TRPC_UNAUTHORIZED = -32001
 # constants — an `addonId` pin, say — the hub refusing it can never be fixed by
 # asking again, so it is a different failure from "the hub is busy".
 _TRPC_BAD_REQUEST = -32600
+# -32003 is FORBIDDEN: the hub VERIFIED the token and refused the operation.
+# The distinction from UNAUTHORIZED is the whole point — see
+# `CamStackForbiddenError`.
+_TRPC_FORBIDDEN = -32003
 
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 
@@ -53,6 +57,28 @@ class CamStackAuthError(CamStackError):
 
 class CamStackApiError(CamStackError):
     """The hub answered, and the answer was an error."""
+
+
+class CamStackForbiddenError(CamStackApiError):
+    """The hub ACCEPTED the token and refused the OPERATION.
+
+    Deliberately not a `CamStackAuthError`, and the difference is not
+    academic. `401` means the credential is stale and a fresh one fixes it;
+    `403` means the credential is fine and the GRANT behind it is too narrow.
+    Nothing a token refresh — or a re-link, which mints the same grant again —
+    can do will change the answer.
+
+    Conflating the two cost the operator a whole afternoon on 2026-08-09:
+    Home Assistant linked successfully, the first authenticated call came back
+    `403 No scope grants view on 'device-export'`, this client called that
+    "hub rejected the token", the coordinator raised `ConfigEntryAuthFailed`,
+    Home Assistant announced "authentication expired", and the operator
+    re-linked — into a token carrying the identical grant. Three unrevoked
+    sessions later the hub had still never rejected a credential.
+
+    The hub's own message names the missing grant, so it is carried through
+    verbatim: it is the fix instruction.
+    """
 
 
 class CamStackRequestError(CamStackApiError):
@@ -234,7 +260,7 @@ class CamStackClient:
                 ssl=self._verify_ssl,
                 timeout=_REQUEST_TIMEOUT,
             ) as response:
-                if response.status in (401, 403):
+                if response.status == 401:
                     raise CamStackAuthError(f"{path}: hub rejected the token")
                 status = response.status
                 text = await response.text()
@@ -243,6 +269,11 @@ class CamStackClient:
         except aiohttp.ClientError as err:
             raise CamStackConnectionError(f"{path}: {err}") from err
 
+        # The addon-route gate answers `403 Token scope mismatch` when the link
+        # does not carry an `addon:` grant for this addon — which is every HA
+        # control entity at once, and is not something a new token fixes.
+        if status == 403:
+            raise CamStackForbiddenError(f"{path}: {_refusal_reason(text)}")
         if status >= 400:
             raise CamStackApiError(f"{path}: hub answered {status} {text.strip()}")
         try:
@@ -319,15 +350,40 @@ async def trpc_request(
             ssl=verify_ssl,
             timeout=_REQUEST_TIMEOUT,
         ) as response:
-            if response.status in (401, 403):
+            # 401 alone. A 403 is the hub accepting this token and refusing the
+            # call, and the retry-behind-a-renewal above would replay the same
+            # grant — see `CamStackForbiddenError`.
+            if response.status == 401:
                 raise CamStackAuthError(f"{path}: hub rejected the token")
+            status = response.status
             text = await response.text()
     except TimeoutError as err:
         raise CamStackConnectionError(f"{path}: timed out") from err
     except aiohttp.ClientError as err:
         raise CamStackConnectionError(f"{path}: {err}") from err
 
+    if status == 403:
+        raise CamStackForbiddenError(f"{path}: {_refusal_reason(text)}")
     return _unwrap(path, text)
+
+
+def _refusal_reason(text: str) -> str:
+    """Return the hub's explanation for a refusal, or a stand-in.
+
+    A 403 body is a tRPC envelope whose message names the grant that is
+    missing and lists the ones the link does carry. Discarding it in favour of
+    the status code is what turns a five-second fix into an afternoon.
+    """
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict) and parsed.get("error") is not None:
+        message, _ = _describe_error(parsed["error"])
+        if message and message != "hub returned an error":
+            return message
+    stripped = text.strip()
+    return stripped or "hub refused the request and gave no reason"
 
 
 def _unwrap(path: str, text: str) -> Any:
@@ -345,6 +401,8 @@ def _unwrap(path: str, text: str) -> Any:
         message, code = _describe_error(error)
         if code == _TRPC_UNAUTHORIZED:
             raise CamStackAuthError(f"{path}: {message}")
+        if code == _TRPC_FORBIDDEN:
+            raise CamStackForbiddenError(f"{path}: {message}")
         if code == _TRPC_BAD_REQUEST:
             raise CamStackRequestError(f"{path}: {message}")
         raise CamStackApiError(f"{path}: {message}")
