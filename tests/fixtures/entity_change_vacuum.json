@@ -1,0 +1,79 @@
+{
+  "type": "entity_change",
+  "device_id": "camstack-roborock:s7",
+  "cmps": {
+    "binary_sensor-online": {
+      "platform": "binary_sensor",
+      "unique_id": "roborock:s7_online",
+      "name": "Online",
+      "state_topic": "camstack/camstack-roborock:s7/online",
+      "device_class": "connectivity",
+      "entity_category": "diagnostic",
+      "payload_on": "true",
+      "payload_off": "false"
+    },
+    "sensor-vacuum-control-battery": {
+      "platform": "sensor",
+      "unique_id": "roborock:s7_vacuum_control_battery",
+      "name": "Battery",
+      "state_topic": "camstack/camstack-roborock:s7/vacuum_control_battery",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    },
+    "sensor-vacuum-control-progress": {
+      "platform": "sensor",
+      "unique_id": "roborock:s7_vacuum_control_progress",
+      "name": "Progress",
+      "state_topic": "camstack/camstack-roborock:s7/vacuum_control_progress",
+      "unit_of_measurement": "%",
+      "enabled_by_default": false
+    },
+    "sensor-vacuum-control-error": {
+      "platform": "sensor",
+      "unique_id": "roborock:s7_vacuum_control_error",
+      "name": "Error",
+      "state_topic": "camstack/camstack-roborock:s7/vacuum_control_error",
+      "entity_category": "diagnostic",
+      "enabled_by_default": false
+    },
+    "vacuum-vacuum-control": {
+      "platform": "vacuum",
+      "unique_id": "roborock:s7_vacuum_control",
+      "name": "Vacuum control",
+      "state_topic": "camstack/camstack-roborock:s7/vacuum_control",
+      "controls": {
+        "fan_speed": {
+          "state_topic": "camstack/camstack-roborock:s7/vacuum_control_fan_speed",
+          "options": [
+            "quiet",
+            "balanced",
+            "turbo"
+          ]
+        },
+        "start": {
+          "command_topic": "camstack/camstack-roborock:s7/vacuum_control_start/set"
+        },
+        "pause": {
+          "command_topic": "camstack/camstack-roborock:s7/vacuum_control_pause/set"
+        },
+        "stop": {
+          "command_topic": "camstack/camstack-roborock:s7/vacuum_control_stop/set"
+        },
+        "return_to_base": {
+          "command_topic": "camstack/camstack-roborock:s7/vacuum_control_return_to_base/set"
+        },
+        "locate": {
+          "command_topic": "camstack/camstack-roborock:s7/vacuum_control_locate/set"
+        }
+      }
+    }
+  },
+  "dev": {
+    "ids": [
+      "camstack-roborock:s7"
+    ],
+    "name": "Robot",
+    "mf": "CamStack",
+    "mdl": "vacuum"
+  }
+}

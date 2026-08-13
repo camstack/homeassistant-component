@@ -40,18 +40,32 @@ from .migration import async_migrate_entry, entry_has_credentials, entry_is_oaut
 from .oauth import CamStackOAuth2Implementation, OAuth2Auth
 from .push import CamStackPushHub
 from .push_view import async_register_push_view, async_unregister_push_hub
+from .version_view import async_register_version_view
 
 __all__ = ["async_migrate_entry"]
 
+# Every platform this integration builds — and the answer the hub reads at
+# `/api/camstack/version` to decide what to send. Adding one here is what
+# makes the hub start using it; there is deliberately no second list.
 PLATFORMS: list[Platform] = [
+    Platform.ALARM_CONTROL_PANEL,
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
     Platform.CAMERA,
+    Platform.CLIMATE,
+    Platform.COVER,
+    Platform.FAN,
+    Platform.HUMIDIFIER,
     Platform.IMAGE,
+    Platform.LOCK,
+    Platform.MEDIA_PLAYER,
     Platform.NUMBER,
     Platform.SELECT,
     Platform.SENSOR,
     Platform.SWITCH,
+    Platform.VACUUM,
+    Platform.VALVE,
+    Platform.WATER_HEATER,
 ]
 
 
@@ -61,6 +75,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: CamStackConfigEntry) -> 
     # address but no password, and an operator whose sidebar disappeared during
     # an upgrade has no way to tell an upgrade from a breakage.
     await async_setup_frontend(hass, entry)
+    # Before the credential check too: the hub asks what this integration
+    # builds in order to decide what to SEND, and an entry waiting for
+    # credentials still has to answer honestly rather than 404 into the
+    # hub's "pre-native component" branch.
+    async_register_version_view(hass)
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
 
     if not entry_has_credentials(entry.data):

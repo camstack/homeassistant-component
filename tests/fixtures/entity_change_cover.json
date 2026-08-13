@@ -1,0 +1,63 @@
+{
+  "type": "entity_change",
+  "device_id": "camstack-zigbee:0x0017880109",
+  "cmps": {
+    "binary_sensor-online": {
+      "platform": "binary_sensor",
+      "unique_id": "zigbee:0x0017880109_online",
+      "name": "Online",
+      "state_topic": "camstack/camstack-zigbee:0x0017880109/online",
+      "device_class": "connectivity",
+      "entity_category": "diagnostic",
+      "payload_on": "true",
+      "payload_off": "false"
+    },
+    "sensor-battery": {
+      "platform": "sensor",
+      "unique_id": "zigbee:0x0017880109_battery",
+      "name": "Battery",
+      "state_topic": "camstack/camstack-zigbee:0x0017880109/battery",
+      "device_class": "battery",
+      "unit_of_measurement": "%"
+    },
+    "cover-cover": {
+      "platform": "cover",
+      "unique_id": "zigbee:0x0017880109_cover",
+      "name": "Cover",
+      "state_topic": "camstack/camstack-zigbee:0x0017880109/cover",
+      "controls": {
+        "position": {
+          "state_topic": "camstack/camstack-zigbee:0x0017880109/cover_position",
+          "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_position/set",
+          "min": 0,
+          "max": 100,
+          "step": 1
+        },
+        "tilt": {
+          "state_topic": "camstack/camstack-zigbee:0x0017880109/cover_tilt",
+          "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_tilt/set",
+          "min": 0,
+          "max": 100,
+          "step": 1
+        },
+        "open": {
+          "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_open/set"
+        },
+        "close": {
+          "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_close/set"
+        },
+        "stop": {
+          "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_stop/set"
+        }
+      }
+    }
+  },
+  "dev": {
+    "ids": [
+      "camstack-zigbee:0x0017880109"
+    ],
+    "name": "Tapparella salone",
+    "mf": "IKEA",
+    "mdl": "FYRTUR"
+  }
+}

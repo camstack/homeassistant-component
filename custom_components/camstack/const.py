@@ -70,6 +70,15 @@ MANUFACTURER: Final = "CamStack"
 # POSTs into a 404 forever, with nothing in Home Assistant's log to say so.
 PUSH_VIEW_URL: Final = "/api/camstack/push"
 
+# Where the hub asks what this integration can BUILD, before it decides how
+# to shape a device. See `version_view.py`: the hub reads the platform list
+# and falls back to the degraded projection for anything absent, so an
+# operator who has not updated through HACS keeps working entities.
+#
+# Absent (404) on every version before the native platforms shipped, which is
+# how an OLD integration is told from an unreachable one.
+VERSION_VIEW_URL: Final = "/api/camstack/version"
+
 # Commands travel the other way, onto the export addon's `addon-routes`
 # surface: POST {topic, value}, Bearer-authenticated with the hub token this
 # entry already holds.

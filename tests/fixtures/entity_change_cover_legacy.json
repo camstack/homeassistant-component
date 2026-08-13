@@ -1,0 +1,81 @@
+{
+  "type": "entity_change",
+  "device_id": "camstack-zigbee:0x0017880109",
+  "cmps": {
+    "binary_sensor-online": {
+      "platform": "binary_sensor",
+      "unique_id": "zigbee:0x0017880109_online",
+      "name": "Online",
+      "state_topic": "camstack/camstack-zigbee:0x0017880109/online",
+      "device_class": "connectivity",
+      "entity_category": "diagnostic",
+      "payload_on": "true",
+      "payload_off": "false"
+    },
+    "sensor-cover": {
+      "platform": "sensor",
+      "unique_id": "zigbee:0x0017880109_cover",
+      "name": "Cover",
+      "state_topic": "camstack/camstack-zigbee:0x0017880109/cover",
+      "icon": "mdi:window-shutter"
+    },
+    "number-cover-position": {
+      "platform": "number",
+      "unique_id": "zigbee:0x0017880109_cover_position",
+      "name": "Position",
+      "state_topic": "camstack/camstack-zigbee:0x0017880109/cover_position",
+      "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_position/set",
+      "unit_of_measurement": "%",
+      "icon": "mdi:arrow-up-down",
+      "min": 0,
+      "max": 100,
+      "step": 1
+    },
+    "number-cover-tilt": {
+      "platform": "number",
+      "unique_id": "zigbee:0x0017880109_cover_tilt",
+      "name": "Tilt position",
+      "state_topic": "camstack/camstack-zigbee:0x0017880109/cover_tilt",
+      "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_tilt/set",
+      "unit_of_measurement": "%",
+      "icon": "mdi:angle-acute",
+      "min": 0,
+      "max": 100,
+      "step": 1,
+      "enabled_by_default": false
+    },
+    "button-cover-open": {
+      "platform": "button",
+      "unique_id": "zigbee:0x0017880109_cover_open",
+      "name": "Open",
+      "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_open/set",
+      "icon": "mdi:arrow-up-box",
+      "payload_press": "PRESS"
+    },
+    "button-cover-close": {
+      "platform": "button",
+      "unique_id": "zigbee:0x0017880109_cover_close",
+      "name": "Close",
+      "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_close/set",
+      "icon": "mdi:arrow-down-box",
+      "payload_press": "PRESS"
+    },
+    "button-cover-stop": {
+      "platform": "button",
+      "unique_id": "zigbee:0x0017880109_cover_stop",
+      "name": "Stop",
+      "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_stop/set",
+      "icon": "mdi:stop",
+      "enabled_by_default": false,
+      "payload_press": "PRESS"
+    }
+  },
+  "dev": {
+    "ids": [
+      "camstack-zigbee:0x0017880109"
+    ],
+    "name": "Tapparella salone",
+    "mf": "IKEA",
+    "mdl": "FYRTUR"
+  }
+}

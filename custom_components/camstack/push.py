@@ -44,6 +44,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
@@ -380,11 +381,17 @@ class CamStackPushHub:
         self._async_save()
 
         removed = set(previous) - set(incoming)
+        gone: dict[str, str] = {}
         for component_key in removed:
-            self._async_remove_entity(device_key, component_key, previous)
+            entity_id = self._async_remove_entity(device_key, component_key, previous)
+            if entity_id is not None:
+                gone[
+                    push_unique_id(device_key, component_key, previous[component_key])
+                ] = entity_id
         added = set(incoming) - set(previous)
         if added:
             self._async_add((device_key, key) for key in added)
+        self._async_report_migrations(device_key, gone, incoming, added)
         if removed or added:
             _LOGGER.debug(
                 "%s: %d entities (+%d, -%d)",
@@ -405,18 +412,76 @@ class CamStackPushHub:
         device_key: str,
         component_key: str,
         previous: dict[str, dict[str, Any]],
-    ) -> None:
-        """Delete an entity the hub no longer exports."""
+    ) -> str | None:
+        """Delete an entity the hub no longer exports, and name it."""
         component = previous.get(component_key, {})
         platform = component.get("platform")
         if not isinstance(platform, str):
-            return
+            return None
         registry = er.async_get(self.hass)
         entity_id = registry.async_get_entity_id(
             platform, DOMAIN, push_unique_id(device_key, component_key, component)
         )
-        if entity_id is not None:
-            registry.async_remove(entity_id)
+        if entity_id is None:
+            return None
+        registry.async_remove(entity_id)
+        return entity_id
+
+    @callback
+    def _async_report_migrations(
+        self,
+        device_key: str,
+        gone: dict[str, str],
+        incoming: dict[str, dict[str, Any]],
+        added: set[str],
+    ) -> None:
+        """Say when an entity moved to a different Home Assistant platform.
+
+        A capability the hub used to export as a `sensor` and now exports as
+        a `cover` keeps its `unique_id` — but Home Assistant keys its
+        registry on (platform, integration, unique_id), so the cover is a
+        NEW entity and the sensor is removed above rather than left behind
+        as an orphan. That is the only migration Home Assistant allows: an
+        entity cannot change domain in place, at any version.
+
+        Which means an automation, a script or a dashboard card pointing at
+        `sensor.gate_cover` now points at nothing. NOTHING else would tell
+        the operator that: the old entity simply stops existing, and a
+        broken automation is discovered the day it fails to run. So it is
+        said out loud, once, naming the entity that went.
+        """
+        migrated: list[str] = []
+        for component_key in added:
+            unique_id = push_unique_id(
+                device_key, component_key, incoming[component_key]
+            )
+            previous_entity_id = gone.get(unique_id)
+            if previous_entity_id is None:
+                continue
+            platform = incoming[component_key].get("platform")
+            migrated.append(f"{previous_entity_id} -> {platform}")
+        if not migrated:
+            return
+        _LOGGER.warning(
+            "CamStack now exports %s as native Home Assistant platforms. "
+            "These entities were replaced and their old ids no longer exist: "
+            "%s. Automations and dashboards pointing at them need updating",
+            device_key,
+            ", ".join(sorted(migrated)),
+        )
+        persistent_notification.async_create(
+            self.hass,
+            title="CamStack entities moved to native platforms",
+            message=(
+                "CamStack now exports these as native Home Assistant "
+                "platforms, so the entities below were replaced:\n\n"
+                + "\n".join(f"- `{entry}`" for entry in sorted(migrated))
+                + "\n\nThe new entities are on the same device, with the same "
+                "names. Any automation, script or dashboard card referring to "
+                "the old entity ids needs to point at the new ones."
+            ),
+            notification_id=f"{DOMAIN}_migrated_{device_key}",
+        )
 
     @callback
     def _async_save(self) -> None:

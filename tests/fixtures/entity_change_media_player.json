@@ -1,0 +1,74 @@
+{
+  "type": "entity_change",
+  "device_id": "camstack-sonos:player-405",
+  "cmps": {
+    "binary_sensor-online": {
+      "platform": "binary_sensor",
+      "unique_id": "sonos:player-405_online",
+      "name": "Online",
+      "state_topic": "camstack/camstack-sonos:player-405/online",
+      "device_class": "connectivity",
+      "entity_category": "diagnostic",
+      "payload_on": "true",
+      "payload_off": "false"
+    },
+    "media_player-media-player": {
+      "platform": "media_player",
+      "unique_id": "sonos:player-405_media_player",
+      "name": "Media player",
+      "state_topic": "camstack/camstack-sonos:player-405/media_player",
+      "controls": {
+        "volume": {
+          "state_topic": "camstack/camstack-sonos:player-405/media_player_volume",
+          "command_topic": "camstack/camstack-sonos:player-405/media_player_volume/set",
+          "min": 0,
+          "max": 100,
+          "step": 1
+        },
+        "mute": {
+          "state_topic": "camstack/camstack-sonos:player-405/media_player_muted",
+          "command_topic": "camstack/camstack-sonos:player-405/media_player_muted/set"
+        },
+        "source": {
+          "state_topic": "camstack/camstack-sonos:player-405/media_player_source",
+          "options": [
+            "Spotify",
+            "TV",
+            "Radio"
+          ]
+        },
+        "shuffle": {
+          "state_topic": "camstack/camstack-sonos:player-405/media_player_shuffle",
+          "command_topic": "camstack/camstack-sonos:player-405/media_player_shuffle/set"
+        },
+        "repeat": {
+          "state_topic": "camstack/camstack-sonos:player-405/media_player_repeat",
+          "command_topic": "camstack/camstack-sonos:player-405/media_player_repeat/set"
+        },
+        "play": {
+          "command_topic": "camstack/camstack-sonos:player-405/media_player_play/set"
+        },
+        "pause": {
+          "command_topic": "camstack/camstack-sonos:player-405/media_player_pause/set"
+        },
+        "stop": {
+          "command_topic": "camstack/camstack-sonos:player-405/media_player_stop/set"
+        },
+        "next": {
+          "command_topic": "camstack/camstack-sonos:player-405/media_player_next/set"
+        },
+        "previous": {
+          "command_topic": "camstack/camstack-sonos:player-405/media_player_previous/set"
+        }
+      }
+    }
+  },
+  "dev": {
+    "ids": [
+      "camstack-sonos:player-405"
+    ],
+    "name": "Sonos cucina",
+    "mf": "CamStack",
+    "mdl": "media-player"
+  }
+}

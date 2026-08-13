@@ -34,6 +34,16 @@ list below describes today's hub rather than a limit of the integration.
 | `button` | Reboot, and the PTZ steps, on cameras that declare the capability |
 | `select` | Snooze durations and PTZ presets |
 | `number` | Writable numeric capabilities, such as a light's brightness |
+| `cover` | Shutters, blinds and garage doors — open/close/stop, position and slat tilt |
+| `climate` | Thermostats — mode, setpoints, measured temperature and humidity, fan mode, preset |
+| `lock` | Locks, with the three states a switch cannot hold: `locking`, `unlocking` and `jammed` |
+| `fan` | Fans — speed, oscillation, direction, preset |
+| `humidifier` | Humidifiers and dehumidifiers — target, measurement, mode |
+| `water_heater` | Water heaters — operation mode, setpoint, away |
+| `valve` | Water and gas valves — open/close/stop, position |
+| `vacuum` | Robot vacuums — start, pause, return home, locate, suction |
+| `media_player` | Players — transport, volume, mute, source, shuffle, repeat |
+| `alarm_control_panel` | Alarm panels — the arm modes the panel says it accepts |
 | Sidebar panel | The CamStack web client, full screen, in the Home Assistant sidebar |
 | Lovelace card | `custom:camstack-grid-card` — a CamStack camera grid inside a dashboard |
 
@@ -206,6 +216,46 @@ two shipping chains that must move together are two shipping chains that drift.
 A platform this version cannot build costs that one entity and logs a line
 naming it. Everything else on the device is unaffected.
 
+### The hub asks before it sends
+
+The hub and this integration ship on different trains: the hub is deployed when
+the operator deploys it, this is updated through HACS when the operator decides
+to. So the hub asks — `GET /api/camstack/version` returns the version and the
+**platform list** this integration builds, and the hub uses a native platform
+only when it finds its name there.
+
+An older integration answers 404, and the hub reads that as "pre-native" and
+sends the degraded projection instead: a cover as a state sensor, two writable
+numbers and three buttons. Nothing breaks by not updating; fidelity is what is
+gained by updating.
+
+The list is read from `PLATFORMS` in `__init__.py` rather than kept by hand — a
+second list would be one release away from promising the hub something nobody
+wired up.
+
+### Native platforms replace the entities they cover
+
+From 0.4.0 a cover is a `cover` rather than five separate entities. Home
+Assistant keys its registry on (platform, integration, unique_id), so **an
+entity cannot change domain in place** — at any Home Assistant version. The old
+`sensor.<name>_cover` is therefore REMOVED and `cover.<name>_cover` is created
+in its place, on the same device, with the same name and the same `unique_id`.
+
+What that costs, and what it does not:
+
+- **Automations, scripts and dashboard cards** pointing at the old entity id
+  need repointing. The integration raises a persistent notification naming every
+  entity id that moved, and logs the same line, because nothing else would tell
+  you until an automation failed to run.
+- **Recorder history** under the old entity id stays in the database and stops
+  growing. There is no supported way to carry it across a domain change.
+- **Entity settings** you customised (name, icon, area override) are per registry
+  entry and do not carry across either.
+
+Everything the native entity does not read is left exactly where it was — a
+vacuum's battery, its cleaning progress and its error label are still their own
+sensors, because Home Assistant's vacuum has nowhere to show them.
+
 ### One CamStack device, one Home Assistant device
 
 Identity is the hub's `device_id` (`camstack-<stableId>`), which is also what
@@ -293,10 +343,12 @@ from it. It is **not published as an add-on repository** — see
 - The synthetic devices from the design: a **Notification Center** carrying one
   switch per notification rule, and a **CamStack Server** device carrying node
   health, addon health and the liveness monitor's findings
-- `alarm_control_panel`, which the hub maps but does not yet project a state for
 - Doorbell presses and classified detections on Home Assistant's `event` platform
-- A range on the wire for `number` entities; Home Assistant's 0-100 default
-  applies until then
+- `light`, `siren`, `text` and `device_tracker`, the platforms a capability is
+  still projected onto rather than modelled by
+- The controls a native entity offers grow with the hub's own route table: a
+  thermostat's fan mode, a media player's source and a vacuum's suction are
+  readings today and become controls the moment the hub can write them
 
 ## Development
 

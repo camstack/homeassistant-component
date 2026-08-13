@@ -1,0 +1,37 @@
+{
+  "type": "entity_change",
+  "device_id": "camstack-nc:alarm",
+  "cmps": {
+    "binary_sensor-online": {
+      "platform": "binary_sensor",
+      "unique_id": "nc:alarm_online",
+      "name": "Online",
+      "state_topic": "camstack/camstack-nc:alarm/online",
+      "device_class": "connectivity",
+      "entity_category": "diagnostic",
+      "payload_on": "true",
+      "payload_off": "false"
+    },
+    "alarm_control_panel-alarm-panel": {
+      "platform": "alarm_control_panel",
+      "unique_id": "nc:alarm_alarm_panel",
+      "name": "Alarm panel",
+      "state_topic": "camstack/camstack-nc:alarm/alarm_panel",
+      "command_topic": "camstack/camstack-nc:alarm/alarm_panel/set",
+      "options": [
+        "home",
+        "away",
+        "night"
+      ],
+      "code_arm_required": false
+    }
+  },
+  "dev": {
+    "ids": [
+      "camstack-nc:alarm"
+    ],
+    "name": "Allarme casa",
+    "mf": "CamStack",
+    "mdl": "alarm-panel"
+  }
+}
