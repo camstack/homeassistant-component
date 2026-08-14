@@ -43,6 +43,17 @@ def load_fixture(name: str) -> dict[str, Any]:
 
 
 ENTITY_CHANGE_CAMERA: dict[str, Any] = load_fixture("entity_change_camera.json")
+"""The same camera from a hub that announces its STREAMS.
+
+Generated the same way — by running the hub's `entity-catalog.ts` — for a
+device whose `webrtcSession.listStreams` returns adaptive, three profiles and
+one raw substream. It is a second fixture rather than a replacement because
+the first one records what a hub SHIPPED, and the fallback path has to keep
+working against it.
+"""
+ENTITY_CHANGE_CAMERA_STREAMS: dict[str, Any] = load_fixture(
+    "entity_change_camera_streams.json"
+)
 ENTITY_CHANGE_SENSOR: dict[str, Any] = load_fixture("entity_change_sensor.json")
 
 CAMERA_KEY: str = ENTITY_CHANGE_CAMERA["device_id"]
