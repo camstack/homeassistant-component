@@ -153,16 +153,20 @@ class CamStackCoordinator(DataUpdateCoordinator[CamStackData]):
             exported = await self._async_fetch_exported_ids()
             listing = await self.client.query("deviceManager.listAll", {})
         except CamStackForbiddenError as err:
-            # The token is VALID and the grant behind the link is too narrow.
+            # A 403 is the hub ACCEPTING the credential and refusing the CALL.
             # `ConfigEntryAuthFailed` here would send the operator to reauth,
-            # where re-linking mints a token with the identical grant and the
-            # next call fails identically — the loop that produced three live
-            # sessions on 2026-08-09. A permanent setup error carrying the
-            # hub's own sentence is the only honest answer.
+            # which replays the same credential — the loop that produced three
+            # live sessions on 2026-08-09. So: a permanent setup error.
+            #
+            # WHY the hub refused is hub-side and not observable from here.
+            # This component once shipped a fixed diagnosis ("re-linking mints
+            # the same grant, update CamStack first") and it was wrong: the
+            # refusal came from a scope-enforcement regression on the hub, and
+            # the sentence sent the operator re-linking for nothing. Report the
+            # hub's own message verbatim and add nothing causal to it.
             raise ConfigEntryError(
-                f"{err}. The link itself is valid — re-linking mints the same "
-                "grant. The hub has to offer the missing one first, which "
-                "means updating CamStack, and only then re-linking"
+                f"{err}. The hub refused the request with the message above. "
+                "Check the hub's version and the link's grants on the hub side"
             ) from err
         except CamStackRequestError as err:
             # The hub refused the request itself. Asking again cannot change

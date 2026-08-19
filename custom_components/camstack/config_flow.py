@@ -133,9 +133,10 @@ class CamStackConfigFlow(
                 errors["base"] = "unknown"
             else:
                 if not supported:
-                    # Not an error the operator can fix by retyping: the hub
-                    # simply does not have this yet. Say so and offer the path
-                    # that does work.
+                    # Not an error the operator can fix by retyping: the
+                    # discovery endpoint did not answer. Report that — an old
+                    # hub and a proxy swallowing the path look identical from
+                    # here — and offer the path that does work.
                     errors["base"] = "oauth_unsupported"
                 else:
                     self._hub = dict(user_input)

@@ -57,7 +57,7 @@
       "cannot_connect": "Impossibile raggiungere l'hub a quell'indirizzo e porta.",
       "invalid_auth": "L'hub ha rifiutato le credenziali. Gli account con autenticazione a due fattori non possono essere usati qui.",
       "unknown": "Errore imprevisto. Controlla il log di Home Assistant.",
-      "oauth_unsupported": "Questo hub non supporta ancora il collegamento. Aggiorna l'hub, oppure prosegui con nome utente e password."
+      "oauth_unsupported": "Questo hub non ha risposto all'endpoint di collegamento. Aggiorna l'hub, controlla ciò che sta davanti a esso, oppure prosegui con nome utente e password."
     },
     "abort": {
       "already_configured": "Questo hub è già configurato.",

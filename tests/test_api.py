@@ -21,10 +21,10 @@ from custom_components.camstack.api import (
 )
 
 # What the hub actually answered on 2026-08-09 when a linked Home Assistant made
-# its first authenticated call. The token was VALID — the grant behind the link
-# simply did not cover this capability. Recorded verbatim because the message is
-# the fix instruction, and because a fake that answers a bare 403 would not
-# prove the reason survives to the operator.
+# its first authenticated call. The token was VALID — the hub understood it and
+# declined the call. Recorded verbatim because the hub's sentence is the only
+# account of the refusal there is, and because a fake that answers a bare 403
+# would not prove that sentence survives to the operator.
 FORBIDDEN_BODY: str = json.dumps(
     {
         "error": {
@@ -104,27 +104,27 @@ async def test_a_rejected_token_is_renewed_exactly_once() -> None:
 def test_unwrap_maps_forbidden_onto_a_permission_error() -> None:
     """A refusal is not an expired login, and must not be typed as one.
 
-    `-32003` means the hub verified the token and refused the OPERATION. A
-    fresh token cannot change the answer, so calling it an auth error sends
-    Home Assistant to reauth — and the operator re-links a link that was
-    already valid, forever.
+    `-32003` means the hub verified the token and refused the OPERATION.
+    Presenting the same credential again cannot change the answer, so calling
+    it an auth error sends Home Assistant to reauth — and the operator
+    re-links a link that was never rejected, forever.
     """
     with pytest.raises(CamStackForbiddenError) as excinfo:
         _unwrap("deviceExport.listExposedDevices", FORBIDDEN_BODY)
 
-    # The hub names the missing grant. That sentence is the whole fix, so it
-    # has to survive to whoever reads the error.
+    # The hub's own sentence is the only account of the refusal, so it has to
+    # survive to whoever reads the error — unedited.
     assert "No scope grants view on 'device-export'" in str(excinfo.value)
     assert not isinstance(excinfo.value, CamStackAuthError)
 
 
 async def test_a_403_is_not_a_credential_problem_and_is_never_renewed() -> None:
-    """Renewing behind a 403 replays the same grant and fails identically.
+    """Renewing behind a 403 replays the same credential and changes nothing.
 
-    This is the loop that cost the operator three live sessions: the hub said
-    "your grant does not cover this", the component heard "your token is
-    stale", Home Assistant said "authentication expired", and re-linking
-    produced another token with exactly the same grant.
+    This is the loop that cost the operator three live sessions: the hub
+    declined the call, the component heard "your token is stale", Home
+    Assistant said "authentication expired", and re-linking produced another
+    token the hub had never objected to in the first place.
     """
     auth = _FixedTokenAuth()
     session = _AlwaysForbiddenSession()
@@ -141,11 +141,9 @@ async def test_a_403_is_not_a_credential_problem_and_is_never_renewed() -> None:
 async def test_a_403_on_an_addon_route_is_not_a_credential_problem_either() -> None:
     """Every HA control entity travels this path, and it has its own gate.
 
-    The hub's addon-route gate answers `403 Token scope mismatch` when the
-    link carries no `addon:` grant for the addon being posted to. That is one
-    misconfiguration silencing every switch, button and select at once — and
-    calling it an expired login would take the whole config entry down with it
-    instead of leaving the read-only half working.
+    A 403 here silences every switch, button and select at once. Whatever the
+    hub's reason is, calling it an expired login would take the whole config
+    entry down with it instead of leaving the read-only half working.
     """
     auth = _FixedTokenAuth()
     session = _AlwaysForbiddenSession()

@@ -64,20 +64,23 @@ class CamStackForbiddenError(CamStackApiError):
 
     Deliberately not a `CamStackAuthError`, and the difference is not
     academic. `401` means the credential is stale and a fresh one fixes it;
-    `403` means the credential is fine and the GRANT behind it is too narrow.
-    Nothing a token refresh — or a re-link, which mints the same grant again —
-    can do will change the answer.
+    `403` means the hub verified the credential and declined the call, so
+    presenting the same credential again — a refresh, a re-link — cannot
+    change the answer.
 
     Conflating the two cost the operator a whole afternoon on 2026-08-09:
     Home Assistant linked successfully, the first authenticated call came back
     `403 No scope grants view on 'device-export'`, this client called that
     "hub rejected the token", the coordinator raised `ConfigEntryAuthFailed`,
     Home Assistant announced "authentication expired", and the operator
-    re-linked — into a token carrying the identical grant. Three unrevoked
-    sessions later the hub had still never rejected a credential.
+    re-linked. Three unrevoked sessions later the hub had still never rejected
+    a credential.
 
-    The hub's own message names the missing grant, so it is carried through
-    verbatim: it is the fix instruction.
+    What a client can state is the shape of the answer, never its cause: why
+    the hub refused lives entirely on the hub — that refusal turned out to be
+    a scope-enforcement regression there, not anything the operator could fix
+    from Home Assistant. So the hub's own message is carried through verbatim
+    and is never interpreted, extended or explained by this component.
     """
 
 
@@ -269,9 +272,9 @@ class CamStackClient:
         except aiohttp.ClientError as err:
             raise CamStackConnectionError(f"{path}: {err}") from err
 
-        # The addon-route gate answers `403 Token scope mismatch` when the link
-        # does not carry an `addon:` grant for this addon — which is every HA
-        # control entity at once, and is not something a new token fixes.
+        # A 403 on this route is the hub refusing the call, not rejecting the
+        # credential — every HA control entity travels here, and a new token
+        # replays the same credential. Carry the hub's own sentence through.
         if status == 403:
             raise CamStackForbiddenError(f"{path}: {_refusal_reason(text)}")
         if status >= 400:
@@ -352,7 +355,7 @@ async def trpc_request(
         ) as response:
             # 401 alone. A 403 is the hub accepting this token and refusing the
             # call, and the retry-behind-a-renewal above would replay the same
-            # grant — see `CamStackForbiddenError`.
+            # credential — see `CamStackForbiddenError`.
             if response.status == 401:
                 raise CamStackAuthError(f"{path}: hub rejected the token")
             status = response.status
@@ -370,9 +373,10 @@ async def trpc_request(
 def _refusal_reason(text: str) -> str:
     """Return the hub's explanation for a refusal, or a stand-in.
 
-    A 403 body is a tRPC envelope whose message names the grant that is
-    missing and lists the ones the link does carry. Discarding it in favour of
-    the status code is what turns a five-second fix into an afternoon.
+    A 403 body is a tRPC envelope carrying the hub's own account of why it
+    refused — the only account there is, since the reason is hub-side.
+    Discarding it in favour of the status code is what turns a five-second fix
+    into an afternoon. It is returned unmodified; no caller may embellish it.
     """
     try:
         parsed = json.loads(text)

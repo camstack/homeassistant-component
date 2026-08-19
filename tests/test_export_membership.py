@@ -30,8 +30,9 @@ from .conftest import (
     setup_integration,
 )
 
-# The hub's verbatim refusal for a `homeassistant` link whose grant predates the
-# `device-export` scope — the sentence the operator has to be shown.
+# A refusal the hub actually sent on 2026-08-09. Why it sent it is hub-side —
+# it turned out to be a scope-enforcement regression there — so this is the
+# sentence the operator has to be shown, unedited and uninterpreted.
 SCOPE_REFUSAL = (
     "No scope grants view on 'device-export' (system-scope cap). "
     "Have: category:device[view,create], capability:device-manager[view], "
@@ -201,22 +202,26 @@ async def test_an_unresolvable_pin_fails_setup_with_the_hubs_own_message(
     assert hass.states.get("camera.videocamera_ingresso") is None
 
 
-async def test_a_refused_grant_fails_setup_instead_of_asking_for_a_relink(
+async def test_a_refusal_is_reported_verbatim_and_never_diagnosed(
     hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
 ) -> None:
-    """The link is VALID. Sending the operator to reauth is the wrong answer.
+    """The hub's sentence, plus a neutral pointer. No invented cause.
 
     Live failure, 2026-08-09: the operator linked Home Assistant, the hub
     minted a token, and the very first authenticated call — this one — came
-    back `403 FORBIDDEN` because the grant behind the link did not include
-    `device-export`. Home Assistant reported "authentication expired", the
-    operator re-linked, the new token carried the identical grant, and it
-    failed again 25 seconds later. Three unrevoked sessions later the hub had
-    still never rejected a credential.
+    back `403 FORBIDDEN`. Home Assistant reported "authentication expired",
+    the operator re-linked, and it failed again 25 seconds later. Three
+    unrevoked sessions later the hub had still never rejected a credential.
 
     So: a refusal is a permanent setup error carrying the hub's own sentence,
     and it must NOT raise `ConfigEntryAuthFailed`. Reauth is for a credential
     that stopped working; nothing about this one ever did.
+
+    And the reason STOPS at the hub's sentence. The fix that followed shipped
+    a diagnosis instead — "the link is valid, re-linking mints the same grant,
+    update CamStack first" — which was false: the refusal came from a
+    scope-enforcement regression on the hub. A client cannot see hub-side
+    causes, so it must not assert one.
     """
 
     async def respond(path: str, payload: Any | None = None) -> Any:
@@ -231,8 +236,19 @@ async def test_a_refused_grant_fails_setup_instead_of_asking_for_a_relink(
 
     assert config_entry.state is ConfigEntryState.SETUP_ERROR
     reason = config_entry.reason or ""
-    assert "No scope grants view on 'device-export'" in reason
-    # No reauth flow: re-linking mints the same grant and fails identically.
+    # The hub's message, whole and unedited.
+    assert SCOPE_REFUSAL in reason
+    # Plus a pointer that is true whatever the hub's reason turns out to be.
+    assert "The hub refused the request with the message above" in reason
+    # And no causal claim about the hub: those go stale and mislead.
+    for invented in (
+        "re-link",
+        "mints",
+        "updating CamStack",
+        "The link itself is valid",
+    ):
+        assert invented not in reason
+    # No reauth flow: reauth replays the same credential and cannot help.
     assert not [
         flow
         for flow in hass.config_entries.flow.async_progress()
@@ -244,7 +260,7 @@ def test_a_forbidden_is_not_a_bad_request() -> None:
     """403 and 400 are both permanent, and they are not the same permanent.
 
     A bad request is the component's own input being wrong; a forbidden is the
-    operator's grant being too narrow. They read differently and they are
+    hub declining a call it understood. They read differently and they are
     fixed differently, so they are typed apart.
     """
     with pytest.raises(CamStackForbiddenError) as excinfo:

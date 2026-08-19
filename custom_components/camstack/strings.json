@@ -57,7 +57,7 @@
       "cannot_connect": "Could not reach the hub at that address and port.",
       "invalid_auth": "The hub rejected those credentials. Accounts protected by two-factor authentication cannot be used here.",
       "unknown": "Unexpected error. Check the Home Assistant log for details.",
-      "oauth_unsupported": "This hub does not support linking yet. Update the hub, or continue with a username and password."
+      "oauth_unsupported": "This hub did not answer the linking endpoint. Update the hub, check anything sitting in front of it, or continue with a username and password."
     },
     "abort": {
       "already_configured": "That hub is already configured.",
