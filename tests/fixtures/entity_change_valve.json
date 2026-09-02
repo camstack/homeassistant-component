@@ -1,12 +1,12 @@
 {
   "type": "entity_change",
-  "device_id": "camstack-shelly:valve-404",
+  "device_id": "camstack-404",
   "cmps": {
     "binary_sensor-online": {
       "platform": "binary_sensor",
-      "unique_id": "shelly:valve-404_online",
+      "unique_id": "404_online",
       "name": "Online",
-      "state_topic": "camstack/camstack-shelly:valve-404/online",
+      "state_topic": "camstack/camstack-404/online",
       "device_class": "connectivity",
       "entity_category": "diagnostic",
       "payload_on": "true",
@@ -14,32 +14,32 @@
     },
     "valve-valve": {
       "platform": "valve",
-      "unique_id": "shelly:valve-404_valve",
+      "unique_id": "404_valve",
       "name": "Valve",
-      "state_topic": "camstack/camstack-shelly:valve-404/valve",
+      "state_topic": "camstack/camstack-404/valve",
       "controls": {
         "position": {
-          "state_topic": "camstack/camstack-shelly:valve-404/valve_position",
-          "command_topic": "camstack/camstack-shelly:valve-404/valve_position/set",
+          "state_topic": "camstack/camstack-404/valve_position",
+          "command_topic": "camstack/camstack-404/valve_position/set",
           "min": 0,
           "max": 100,
           "step": 1
         },
         "open": {
-          "command_topic": "camstack/camstack-shelly:valve-404/valve_open/set"
+          "command_topic": "camstack/camstack-404/valve_open/set"
         },
         "close": {
-          "command_topic": "camstack/camstack-shelly:valve-404/valve_close/set"
+          "command_topic": "camstack/camstack-404/valve_close/set"
         },
         "stop": {
-          "command_topic": "camstack/camstack-shelly:valve-404/valve_stop/set"
+          "command_topic": "camstack/camstack-404/valve_stop/set"
         }
       }
     }
   },
   "dev": {
     "ids": [
-      "camstack-shelly:valve-404"
+      "camstack-404"
     ],
     "name": "Valvola giardino",
     "mf": "CamStack",

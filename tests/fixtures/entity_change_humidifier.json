@@ -1,12 +1,12 @@
 {
   "type": "entity_change",
-  "device_id": "camstack-tuya:hum-402",
+  "device_id": "camstack-402",
   "cmps": {
     "binary_sensor-online": {
       "platform": "binary_sensor",
-      "unique_id": "tuya:hum-402_online",
+      "unique_id": "402_online",
       "name": "Online",
-      "state_topic": "camstack/camstack-tuya:hum-402/online",
+      "state_topic": "camstack/camstack-402/online",
       "device_class": "connectivity",
       "entity_category": "diagnostic",
       "payload_on": "true",
@@ -14,24 +14,24 @@
     },
     "humidifier-humidifier": {
       "platform": "humidifier",
-      "unique_id": "tuya:hum-402_humidifier",
+      "unique_id": "402_humidifier",
       "name": "Humidifier",
-      "state_topic": "camstack/camstack-tuya:hum-402/humidifier",
-      "command_topic": "camstack/camstack-tuya:hum-402/humidifier/set",
+      "state_topic": "camstack/camstack-402/humidifier",
+      "command_topic": "camstack/camstack-402/humidifier/set",
       "device_class": "humidifier",
       "controls": {
         "current_humidity": {
-          "state_topic": "camstack/camstack-tuya:hum-402/humidifier_current_humidity"
+          "state_topic": "camstack/camstack-402/humidifier_current_humidity"
         },
         "target_humidity": {
-          "state_topic": "camstack/camstack-tuya:hum-402/humidifier_target_humidity",
-          "command_topic": "camstack/camstack-tuya:hum-402/humidifier_target_humidity/set",
+          "state_topic": "camstack/camstack-402/humidifier_target_humidity",
+          "command_topic": "camstack/camstack-402/humidifier_target_humidity/set",
           "min": 30,
           "max": 80,
           "step": 1
         },
         "mode": {
-          "state_topic": "camstack/camstack-tuya:hum-402/humidifier_mode",
+          "state_topic": "camstack/camstack-402/humidifier_mode",
           "options": [
             "auto",
             "sleep",
@@ -39,14 +39,14 @@
           ]
         },
         "action": {
-          "state_topic": "camstack/camstack-tuya:hum-402/humidifier_action"
+          "state_topic": "camstack/camstack-402/humidifier_action"
         }
       }
     }
   },
   "dev": {
     "ids": [
-      "camstack-tuya:hum-402"
+      "camstack-402"
     ],
     "name": "Umidificatore camera",
     "mf": "CamStack",

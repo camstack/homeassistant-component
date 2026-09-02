@@ -106,13 +106,17 @@ class PushDevice:
 def push_unique_id(device_key: str, component_key: str, component: Any) -> str:
     """Return the Home Assistant `unique_id` for one pushed component.
 
-    The hub SENDS `unique_id` (`<stableId>_<entity>`) and documents it as a
-    wire format: it is derived from the device's stable id rather than its
-    numeric one, so a re-adopted camera keeps its history instead of orphaning
-    every automation pointing at it. It is used verbatim, and the
-    `<device_id>_<component_key>` form is only a fallback for a component that
-    somehow arrives without one — computing it when the hub sent something
-    else is how the two sides stop agreeing on an entity's identity.
+    The hub SENDS `unique_id` (`<deviceId>_<entity>`) and documents it as a
+    wire format. **It is used verbatim** — the hub owns it, and the
+    `<device_id>_<component_key>` fallback below is only for a component that
+    somehow arrives without one. Composing an identity when the hub sent one
+    is how the two sides stop agreeing on what an entity IS.
+
+    Note what `device_key` already is on the fallback path: the key the hub
+    put in `entity_change.device_id` / `dev.ids[0]`, taken off the wire and
+    never recomposed here. The one place this integration composes a key is
+    `CamStackDevice.device_key`, and only because the membership listing has
+    no `dev` block to take one from.
     """
     raw = component.get("unique_id") if isinstance(component, dict) else None
     if isinstance(raw, str) and raw:

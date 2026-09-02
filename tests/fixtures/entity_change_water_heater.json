@@ -1,12 +1,12 @@
 {
   "type": "entity_change",
-  "device_id": "camstack-ariston:wh-403",
+  "device_id": "camstack-403",
   "cmps": {
     "binary_sensor-online": {
       "platform": "binary_sensor",
-      "unique_id": "ariston:wh-403_online",
+      "unique_id": "403_online",
       "name": "Online",
-      "state_topic": "camstack/camstack-ariston:wh-403/online",
+      "state_topic": "camstack/camstack-403/online",
       "device_class": "connectivity",
       "entity_category": "diagnostic",
       "payload_on": "true",
@@ -14,9 +14,9 @@
     },
     "water_heater-water-heater": {
       "platform": "water_heater",
-      "unique_id": "ariston:wh-403_water_heater",
+      "unique_id": "403_water_heater",
       "name": "Water heater",
-      "state_topic": "camstack/camstack-ariston:wh-403/water_heater_mode",
+      "state_topic": "camstack/camstack-403/water_heater_mode",
       "options": [
         "off",
         "eco",
@@ -24,18 +24,18 @@
       ],
       "controls": {
         "current_temperature": {
-          "state_topic": "camstack/camstack-ariston:wh-403/water_heater"
+          "state_topic": "camstack/camstack-403/water_heater"
         },
         "target": {
-          "state_topic": "camstack/camstack-ariston:wh-403/water_heater_target",
-          "command_topic": "camstack/camstack-ariston:wh-403/water_heater_target/set",
+          "state_topic": "camstack/camstack-403/water_heater_target",
+          "command_topic": "camstack/camstack-403/water_heater_target/set",
           "min": 35,
           "max": 65,
           "step": 0.5
         },
         "away": {
-          "state_topic": "camstack/camstack-ariston:wh-403/water_heater_away",
-          "command_topic": "camstack/camstack-ariston:wh-403/water_heater_away/set"
+          "state_topic": "camstack/camstack-403/water_heater_away",
+          "command_topic": "camstack/camstack-403/water_heater_away/set"
         }
       },
       "temperature_unit": "\u00b0C"
@@ -43,7 +43,7 @@
   },
   "dev": {
     "ids": [
-      "camstack-ariston:wh-403"
+      "camstack-403"
     ],
     "name": "Scaldabagno",
     "mf": "CamStack",

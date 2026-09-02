@@ -12,9 +12,11 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.camstack.const import DOMAIN
+from custom_components.camstack.coordinator import CamStackDevice
 
 from .conftest import (
     CAMERA_KEY,
+    DEVICE_CAMERA,
     DEVICE_LIST,
     ENTITY_CHANGE_CAMERA,
     ENTITY_CHANGE_CAMERA_STREAMS,
@@ -90,19 +92,34 @@ async def test_a_still_comes_from_the_snapshot_capability(
     assert "snapshot.getSnapshot" in paths
 
 
-async def test_a_device_without_a_stable_id_is_skipped(
+def test_a_device_without_a_numeric_id_is_refused() -> None:
+    """The numeric id is the only identity; an entry without one builds nothing.
+
+    Asserted on `from_payload` directly, and deliberately not through a
+    listing: a device with no id matches no membership entry either, so the
+    integration produces no camera whether the gate exists or not. A test at
+    that level passes with the gate DELETED — which is exactly the shape of
+    green suite this repo has been burned by twice.
+    """
+    for broken in ({**DEVICE_CAMERA, "id": None}, {**DEVICE_CAMERA, "id": "615"}):
+        payload = dict(broken)
+        del payload["stableId"]
+        assert CamStackDevice.from_payload(payload) is None
+
+
+async def test_a_device_is_built_without_its_stable_id(
     hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
 ) -> None:
-    """Numeric ids are reallocated by a re-sync; entities are not built on one.
+    """`stableId` is the hub's addon-facing identity and is not read here.
 
-    An entity keyed on a numeric id follows whichever camera later inherits
-    the number, taking its automations with it. Skipping is the honest answer
-    until the hub sends a stable id.
+    It used to key every entity in this integration — the only CamStack
+    export that let a provider-internal id out of the hub. A listing that
+    omits it entirely must produce exactly the same entities, which is the
+    only way to prove nothing still reads it.
     """
     listing = copy.deepcopy(DEVICE_LIST)
     for payload in listing:
-        if payload["id"] == 615:
-            del payload["stableId"]
+        payload.pop("stableId", None)
 
     async def respond(path: str, payload: Any | None = None) -> Any:
         if path == "deviceManager.listAll":
@@ -110,10 +127,67 @@ async def test_a_device_without_a_stable_id_is_skipped(
         return await make_query_responder()(path, payload)
 
     mock_client.query = AsyncMock(side_effect=respond)
-    runtime = await setup_integration(hass, config_entry)
+    await setup_integration(hass, config_entry)
 
-    assert 615 not in runtime.coordinator.data.devices
-    assert hass.states.get(CAMERA) is None
+    state = hass.states.get(CAMERA)
+    assert state is not None
+    assert state.attributes["camstack_device_key"] == "camstack-615"
+
+
+# ── THE CROSS-SIDE IDENTITY CONTRACT ───────────────────────────────────────
+#
+# The HUB owns the composition rule, in `ha-export/topics.ts::deviceKeyFor`.
+# This integration mirrors it in exactly one place — `CamStackDevice.device_key`
+# — because the camera entity is built from the export MEMBERSHIP and a listing
+# entry carries no `dev.ids[0]` to take. Everywhere a key arrives on the wire it
+# is used verbatim.
+#
+# Two independent compositions agree only by convention, and a divergence is
+# SILENT: the camera lands on a second Home Assistant device beside the pushed
+# entities, and nothing logs it. So both sides assert the same literals for the
+# same device — 615, the operator's `Videocamera ingresso`. The hub half is
+# `packages/addon-provider-homeassistant/src/ha-export/__tests__/
+# entity-catalog.spec.ts`, `describe('identity')`. Change one composition and
+# one of the two goes red.
+
+
+def test_the_device_key_matches_the_hub_rule() -> None:
+    """`camstack-615` — the literal the hub's `deviceKeyFor(615)` returns."""
+    device = CamStackDevice.from_payload(DEVICE_CAMERA)
+
+    assert device is not None
+    assert device.device_key == "camstack-615"
+
+
+async def test_the_camera_entity_keeps_its_own_unique_id(
+    hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
+) -> None:
+    """`camstack_615_camera`, and the hub announces no component claiming it.
+
+    The other half of the collision the hub pins in `camera-entities.spec.ts`:
+    an announced component with `unique_id` `615_camera` would reach this
+    registry as `camstack_615_camera` too, and Home Assistant drops the loser
+    of that race — which would be the operator's camera, with its history.
+    """
+    await setup_integration(hass, config_entry)
+    await push(hass, config_entry, HEARTBEAT)
+    await push(hass, config_entry, ENTITY_CHANGE_CAMERA_STREAMS)
+
+    registry = er.async_get(hass)
+    assert (
+        registry.async_get_entity_id("camera", DOMAIN, f"{DOMAIN}_615_camera") == CAMERA
+    )
+    announced = ENTITY_CHANGE_CAMERA_STREAMS["cmps"].values()
+    assert "615_camera" not in {c.get("unique_id") for c in announced}
+
+
+def test_no_provider_internal_identity_reaches_home_assistant() -> None:
+    """Nothing the hub pushes carries a `stableId`-shaped identity."""
+    wire = str(ENTITY_CHANGE_CAMERA_STREAMS)
+
+    assert "hikvision" not in wire
+    assert ENTITY_CHANGE_CAMERA_STREAMS["device_id"] == "camstack-615"
+    assert ENTITY_CHANGE_CAMERA_STREAMS["dev"]["ids"] == ["camstack-615"]
 
 
 # ── One entity per STREAM ──────────────────────────────────────────────────
@@ -142,7 +216,7 @@ async def test_a_camera_entity_is_built_for_every_stream_the_hub_announces(
 
     registry = er.async_get(hass)
     raw = registry.async_get_entity_id(
-        "camera", DOMAIN, f"{DOMAIN}_hikvision:615_stream_native_main"
+        "camera", DOMAIN, f"{DOMAIN}_615_stream_native_main"
     )
     assert raw is not None
     assert registry.async_get(raw).disabled_by is er.RegistryEntryDisabler.INTEGRATION
@@ -155,7 +229,7 @@ async def test_the_operators_existing_camera_survives_the_new_streams(
 
     The adaptive stream IS this entity — it negotiates no target — so the hub
     announces no component for it. A component claiming
-    `camstack_<stableId>_camera` a second time would make Home Assistant drop
+    `camstack_<deviceId>_camera` a second time would make Home Assistant drop
     one of the two with a "does not generate unique IDs" error, and the one
     it dropped would be the operator's camera with its history on it.
     """
@@ -164,9 +238,7 @@ async def test_the_operators_existing_camera_survives_the_new_streams(
     await push(hass, config_entry, ENTITY_CHANGE_CAMERA_STREAMS)
 
     registry = er.async_get(hass)
-    entity_id = registry.async_get_entity_id(
-        "camera", DOMAIN, f"{DOMAIN}_hikvision:615_camera"
-    )
+    entity_id = registry.async_get_entity_id("camera", DOMAIN, f"{DOMAIN}_615_camera")
     assert entity_id == CAMERA
     assert type(_entity(hass, CAMERA)).__name__ == "CamStackCamera"
 

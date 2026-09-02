@@ -71,7 +71,6 @@ class CamStackDevice:
     """One exported device, as `deviceManager.listAll` describes it."""
 
     device_id: int
-    stable_id: str
     name: str
     device_type: str
     addon_id: str
@@ -82,29 +81,41 @@ class CamStackDevice:
     def device_key(self) -> str:
         """Return the Home Assistant device this device's entities live on.
 
-        The same key the hub puts in `dev.ids[0]`, so the camera entity joins
-        the device its pushed entities are already on instead of creating a
-        second one beside it.
+        **The HUB owns this rule**, in `ha-export/topics.ts::deviceKeyFor`.
+        This is the one place the component composes a key instead of taking
+        one: every pushed entity gets its key verbatim off the wire
+        (`entity_change.device_id`, which is `dev.ids[0]`), but the camera
+        entity is built from the export MEMBERSHIP, and a listing entry
+        carries no `dev` block to take it from.
+
+        Two independent compositions agree only by convention, and a
+        divergence is silent — the camera lands on a SECOND Home Assistant
+        device beside the pushed one. So both sides assert the same literal
+        for device 615: `test_the_device_key_matches_the_hub_rule` here, and
+        "the cross-side identity contract" in the hub's
+        `__tests__/entity-catalog.spec.ts`. Change one and the other is red.
         """
-        return f"{DEVICE_KEY_PREFIX}{self.stable_id}"
+        return f"{DEVICE_KEY_PREFIX}{self.device_id}"
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> CamStackDevice | None:
         """Build a device from a listing entry, or None if it is unusable.
 
-        A device with no `stableId` is skipped rather than keyed on its
-        numeric id: numeric ids are reallocated by a re-sync, so an entity
-        built on one would attach to a different device after re-adoption.
+        The numeric `id` is the ONLY identity used, and a device without one
+        is skipped rather than keyed on something else — every identity in
+        this integration is derived from it, so an entry that lacks it has no
+        entity that can be built.
+
+        `stableId` is deliberately not read at all. It is the hub's
+        addon-facing identity (`(addonId, stableId)` in the device manager),
+        this integration was the only export that ever leaked it, and keeping
+        a field for it would read as a second identity that still matters.
         """
         device_id = payload.get("id")
-        stable_id = payload.get("stableId")
-        if not isinstance(device_id, int) or not isinstance(stable_id, str):
-            return None
-        if not stable_id:
+        if not isinstance(device_id, int):
             return None
         return cls(
             device_id=device_id,
-            stable_id=stable_id,
             name=str(payload.get("name") or f"Device {device_id}"),
             device_type=str(payload.get("type") or "unknown"),
             addon_id=str(payload.get("addonId") or ""),

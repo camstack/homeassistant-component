@@ -1,9 +1,9 @@
 {
   "type": "entity_change",
-  "device_id": "camstack-hikvision:615",
+  "device_id": "camstack-615",
   "dev": {
     "ids": [
-      "camstack-hikvision:615"
+      "camstack-615"
     ],
     "name": "Videocamera ingresso",
     "mf": "Hikvision",
@@ -12,18 +12,18 @@
   "cmps": {
     "binary_sensor-triggered": {
       "platform": "binary_sensor",
-      "unique_id": "hikvision:615_triggered",
+      "unique_id": "615_triggered",
       "name": "Triggered",
-      "state_topic": "camstack/camstack-hikvision:615/triggered",
+      "state_topic": "camstack/camstack-615/triggered",
       "device_class": "motion",
       "payload_on": "true",
       "payload_off": "false"
     },
     "binary_sensor-online": {
       "platform": "binary_sensor",
-      "unique_id": "hikvision:615_online",
+      "unique_id": "615_online",
       "name": "Online",
-      "state_topic": "camstack/camstack-hikvision:615/online",
+      "state_topic": "camstack/camstack-615/online",
       "device_class": "connectivity",
       "entity_category": "diagnostic",
       "payload_on": "true",
@@ -31,53 +31,53 @@
     },
     "image-last-image": {
       "platform": "image",
-      "unique_id": "hikvision:615_last_image",
+      "unique_id": "615_last_image",
       "name": "Last image",
-      "state_topic": "camstack/camstack-hikvision:615/last_image"
+      "state_topic": "camstack/camstack-615/last_image"
     },
     "sensor-objects": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_objects",
+      "unique_id": "615_objects",
       "name": "Objects",
-      "state_topic": "camstack/camstack-hikvision:615/objects",
+      "state_topic": "camstack/camstack-615/objects",
       "icon": "mdi:counter"
     },
     "sensor-audio-last-sound": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_audio_last_sound",
+      "unique_id": "615_audio_last_sound",
       "name": "Audio last sound",
-      "state_topic": "camstack/camstack-hikvision:615/audio_last_sound",
+      "state_topic": "camstack/camstack-615/audio_last_sound",
       "icon": "mdi:ear-hearing"
     },
     "sensor-audio-volume": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_audio_volume",
+      "unique_id": "615_audio_volume",
       "name": "Audio level",
-      "state_topic": "camstack/camstack-hikvision:615/audio_volume",
+      "state_topic": "camstack/camstack-615/audio_volume",
       "unit_of_measurement": "dBFS",
       "icon": "mdi:volume-high"
     },
     "sensor-audio-level-rms": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_audio_level_rms",
+      "unique_id": "615_audio_level_rms",
       "name": "Audio level (RMS)",
-      "state_topic": "camstack/camstack-hikvision:615/audio_level_rms",
+      "state_topic": "camstack/camstack-615/audio_level_rms",
       "icon": "mdi:waveform"
     },
     "sensor-last-detection": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_last_detection",
+      "unique_id": "615_last_detection",
       "name": "Last detection",
-      "state_topic": "camstack/camstack-hikvision:615/last_detection",
+      "state_topic": "camstack/camstack-615/last_detection",
       "device_class": "timestamp",
       "icon": "mdi:clock"
     },
     "select-snooze": {
       "platform": "select",
-      "unique_id": "hikvision:615_snooze",
+      "unique_id": "615_snooze",
       "name": "Snooze notifications",
-      "state_topic": "camstack/camstack-hikvision:615/snooze",
-      "command_topic": "camstack/camstack-hikvision:615/snooze/set",
+      "state_topic": "camstack/camstack-615/snooze",
+      "command_topic": "camstack/camstack-615/snooze/set",
       "options": [
         "Off",
         "15 minutes",
@@ -91,208 +91,208 @@
     },
     "binary_sensor-motion-detected": {
       "platform": "binary_sensor",
-      "unique_id": "hikvision:615_motion_detected",
+      "unique_id": "615_motion_detected",
       "name": "Motion detected",
-      "state_topic": "camstack/camstack-hikvision:615/motion_detected",
+      "state_topic": "camstack/camstack-615/motion_detected",
       "device_class": "motion",
       "payload_on": "true",
       "payload_off": "false"
     },
     "image-motion-last-image": {
       "platform": "image",
-      "unique_id": "hikvision:615_motion_last_image",
+      "unique_id": "615_motion_last_image",
       "name": "Motion last image",
-      "state_topic": "camstack/camstack-hikvision:615/motion_last_image"
+      "state_topic": "camstack/camstack-615/motion_last_image"
     },
     "sensor-motion-last-detection": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_motion_last_detection",
+      "unique_id": "615_motion_last_detection",
       "name": "Motion last detection",
-      "state_topic": "camstack/camstack-hikvision:615/motion_last_detection",
+      "state_topic": "camstack/camstack-615/motion_last_detection",
       "device_class": "timestamp"
     },
     "sensor-motion-objects": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_motion_objects",
+      "unique_id": "615_motion_objects",
       "name": "Motion objects",
-      "state_topic": "camstack/camstack-hikvision:615/motion_objects",
+      "state_topic": "camstack/camstack-615/motion_objects",
       "icon": "mdi:counter",
       "enabled_by_default": false
     },
     "binary_sensor-audio-detected": {
       "platform": "binary_sensor",
-      "unique_id": "hikvision:615_audio_detected",
+      "unique_id": "615_audio_detected",
       "name": "Audio detected",
-      "state_topic": "camstack/camstack-hikvision:615/audio_detected",
+      "state_topic": "camstack/camstack-615/audio_detected",
       "device_class": "motion",
       "payload_on": "true",
       "payload_off": "false"
     },
     "image-audio-last-image": {
       "platform": "image",
-      "unique_id": "hikvision:615_audio_last_image",
+      "unique_id": "615_audio_last_image",
       "name": "Audio last image",
-      "state_topic": "camstack/camstack-hikvision:615/audio_last_image"
+      "state_topic": "camstack/camstack-615/audio_last_image"
     },
     "sensor-audio-last-detection": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_audio_last_detection",
+      "unique_id": "615_audio_last_detection",
       "name": "Audio last detection",
-      "state_topic": "camstack/camstack-hikvision:615/audio_last_detection",
+      "state_topic": "camstack/camstack-615/audio_last_detection",
       "device_class": "timestamp"
     },
     "sensor-audio-objects": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_audio_objects",
+      "unique_id": "615_audio_objects",
       "name": "Audio objects",
-      "state_topic": "camstack/camstack-hikvision:615/audio_objects",
+      "state_topic": "camstack/camstack-615/audio_objects",
       "icon": "mdi:counter",
       "enabled_by_default": false
     },
     "binary_sensor-person-detected": {
       "platform": "binary_sensor",
-      "unique_id": "hikvision:615_person_detected",
+      "unique_id": "615_person_detected",
       "name": "Person detected",
-      "state_topic": "camstack/camstack-hikvision:615/person_detected",
+      "state_topic": "camstack/camstack-615/person_detected",
       "device_class": "motion",
       "payload_on": "true",
       "payload_off": "false"
     },
     "image-person-last-image": {
       "platform": "image",
-      "unique_id": "hikvision:615_person_last_image",
+      "unique_id": "615_person_last_image",
       "name": "Person last image",
-      "state_topic": "camstack/camstack-hikvision:615/person_last_image"
+      "state_topic": "camstack/camstack-615/person_last_image"
     },
     "sensor-person-last-detection": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_person_last_detection",
+      "unique_id": "615_person_last_detection",
       "name": "Person last detection",
-      "state_topic": "camstack/camstack-hikvision:615/person_last_detection",
+      "state_topic": "camstack/camstack-615/person_last_detection",
       "device_class": "timestamp"
     },
     "sensor-person-objects": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_person_objects",
+      "unique_id": "615_person_objects",
       "name": "Person objects",
-      "state_topic": "camstack/camstack-hikvision:615/person_objects",
+      "state_topic": "camstack/camstack-615/person_objects",
       "icon": "mdi:counter",
       "enabled_by_default": false
     },
     "sensor-person-last-label": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_person_last_label",
+      "unique_id": "615_person_last_label",
       "name": "Person last label",
-      "state_topic": "camstack/camstack-hikvision:615/person_last_label",
+      "state_topic": "camstack/camstack-615/person_last_label",
       "icon": "mdi:tag"
     },
     "binary_sensor-vehicle-detected": {
       "platform": "binary_sensor",
-      "unique_id": "hikvision:615_vehicle_detected",
+      "unique_id": "615_vehicle_detected",
       "name": "Vehicle detected",
-      "state_topic": "camstack/camstack-hikvision:615/vehicle_detected",
+      "state_topic": "camstack/camstack-615/vehicle_detected",
       "device_class": "motion",
       "payload_on": "true",
       "payload_off": "false"
     },
     "image-vehicle-last-image": {
       "platform": "image",
-      "unique_id": "hikvision:615_vehicle_last_image",
+      "unique_id": "615_vehicle_last_image",
       "name": "Vehicle last image",
-      "state_topic": "camstack/camstack-hikvision:615/vehicle_last_image"
+      "state_topic": "camstack/camstack-615/vehicle_last_image"
     },
     "sensor-vehicle-last-detection": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_vehicle_last_detection",
+      "unique_id": "615_vehicle_last_detection",
       "name": "Vehicle last detection",
-      "state_topic": "camstack/camstack-hikvision:615/vehicle_last_detection",
+      "state_topic": "camstack/camstack-615/vehicle_last_detection",
       "device_class": "timestamp"
     },
     "sensor-vehicle-objects": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_vehicle_objects",
+      "unique_id": "615_vehicle_objects",
       "name": "Vehicle objects",
-      "state_topic": "camstack/camstack-hikvision:615/vehicle_objects",
+      "state_topic": "camstack/camstack-615/vehicle_objects",
       "icon": "mdi:counter",
       "enabled_by_default": false
     },
     "sensor-vehicle-last-label": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_vehicle_last_label",
+      "unique_id": "615_vehicle_last_label",
       "name": "Vehicle last label",
-      "state_topic": "camstack/camstack-hikvision:615/vehicle_last_label",
+      "state_topic": "camstack/camstack-615/vehicle_last_label",
       "icon": "mdi:tag"
     },
     "binary_sensor-animal-detected": {
       "platform": "binary_sensor",
-      "unique_id": "hikvision:615_animal_detected",
+      "unique_id": "615_animal_detected",
       "name": "Animal detected",
-      "state_topic": "camstack/camstack-hikvision:615/animal_detected",
+      "state_topic": "camstack/camstack-615/animal_detected",
       "device_class": "motion",
       "payload_on": "true",
       "payload_off": "false"
     },
     "image-animal-last-image": {
       "platform": "image",
-      "unique_id": "hikvision:615_animal_last_image",
+      "unique_id": "615_animal_last_image",
       "name": "Animal last image",
-      "state_topic": "camstack/camstack-hikvision:615/animal_last_image"
+      "state_topic": "camstack/camstack-615/animal_last_image"
     },
     "sensor-animal-last-detection": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_animal_last_detection",
+      "unique_id": "615_animal_last_detection",
       "name": "Animal last detection",
-      "state_topic": "camstack/camstack-hikvision:615/animal_last_detection",
+      "state_topic": "camstack/camstack-615/animal_last_detection",
       "device_class": "timestamp"
     },
     "sensor-animal-objects": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_animal_objects",
+      "unique_id": "615_animal_objects",
       "name": "Animal objects",
-      "state_topic": "camstack/camstack-hikvision:615/animal_objects",
+      "state_topic": "camstack/camstack-615/animal_objects",
       "icon": "mdi:counter",
       "enabled_by_default": false
     },
     "sensor-animal-last-label": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_animal_last_label",
+      "unique_id": "615_animal_last_label",
       "name": "Animal last label",
-      "state_topic": "camstack/camstack-hikvision:615/animal_last_label",
+      "state_topic": "camstack/camstack-615/animal_last_label",
       "icon": "mdi:tag"
     },
     "binary_sensor-package-detected": {
       "platform": "binary_sensor",
-      "unique_id": "hikvision:615_package_detected",
+      "unique_id": "615_package_detected",
       "name": "Package detected",
-      "state_topic": "camstack/camstack-hikvision:615/package_detected",
+      "state_topic": "camstack/camstack-615/package_detected",
       "device_class": "motion",
       "payload_on": "true",
       "payload_off": "false"
     },
     "image-package-last-image": {
       "platform": "image",
-      "unique_id": "hikvision:615_package_last_image",
+      "unique_id": "615_package_last_image",
       "name": "Package last image",
-      "state_topic": "camstack/camstack-hikvision:615/package_last_image"
+      "state_topic": "camstack/camstack-615/package_last_image"
     },
     "sensor-package-last-detection": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_package_last_detection",
+      "unique_id": "615_package_last_detection",
       "name": "Package last detection",
-      "state_topic": "camstack/camstack-hikvision:615/package_last_detection",
+      "state_topic": "camstack/camstack-615/package_last_detection",
       "device_class": "timestamp"
     },
     "sensor-package-objects": {
       "platform": "sensor",
-      "unique_id": "hikvision:615_package_objects",
+      "unique_id": "615_package_objects",
       "name": "Package objects",
-      "state_topic": "camstack/camstack-hikvision:615/package_objects",
+      "state_topic": "camstack/camstack-615/package_objects",
       "icon": "mdi:counter",
       "enabled_by_default": false
     },
     "camera-stream-high": {
       "platform": "camera",
-      "unique_id": "hikvision:615_stream_high",
+      "unique_id": "615_stream_high",
       "name": "Stream high (2160p)",
       "stream_target": {
         "kind": "profile",
@@ -301,7 +301,7 @@
     },
     "camera-stream-mid": {
       "platform": "camera",
-      "unique_id": "hikvision:615_stream_mid",
+      "unique_id": "615_stream_mid",
       "name": "Stream mid (720p)",
       "stream_target": {
         "kind": "profile",
@@ -310,7 +310,7 @@
     },
     "camera-stream-low": {
       "platform": "camera",
-      "unique_id": "hikvision:615_stream_low",
+      "unique_id": "615_stream_low",
       "name": "Stream low (360p)",
       "stream_target": {
         "kind": "profile",
@@ -319,7 +319,7 @@
     },
     "camera-stream-native-main": {
       "platform": "camera",
-      "unique_id": "hikvision:615_stream_native_main",
+      "unique_id": "615_stream_native_main",
       "name": "Stream main (2160p)",
       "enabled_by_default": false,
       "stream_target": {

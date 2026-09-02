@@ -1,12 +1,12 @@
 {
   "type": "entity_change",
-  "device_id": "camstack-zigbee:0x0017880109",
+  "device_id": "camstack-812",
   "cmps": {
     "binary_sensor-online": {
       "platform": "binary_sensor",
-      "unique_id": "zigbee:0x0017880109_online",
+      "unique_id": "812_online",
       "name": "Online",
-      "state_topic": "camstack/camstack-zigbee:0x0017880109/online",
+      "state_topic": "camstack/camstack-812/online",
       "device_class": "connectivity",
       "entity_category": "diagnostic",
       "payload_on": "true",
@@ -14,47 +14,47 @@
     },
     "sensor-battery": {
       "platform": "sensor",
-      "unique_id": "zigbee:0x0017880109_battery",
+      "unique_id": "812_battery",
       "name": "Battery",
-      "state_topic": "camstack/camstack-zigbee:0x0017880109/battery",
+      "state_topic": "camstack/camstack-812/battery",
       "device_class": "battery",
       "unit_of_measurement": "%"
     },
     "cover-cover": {
       "platform": "cover",
-      "unique_id": "zigbee:0x0017880109_cover",
+      "unique_id": "812_cover",
       "name": "Cover",
-      "state_topic": "camstack/camstack-zigbee:0x0017880109/cover",
+      "state_topic": "camstack/camstack-812/cover",
       "controls": {
         "position": {
-          "state_topic": "camstack/camstack-zigbee:0x0017880109/cover_position",
-          "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_position/set",
+          "state_topic": "camstack/camstack-812/cover_position",
+          "command_topic": "camstack/camstack-812/cover_position/set",
           "min": 0,
           "max": 100,
           "step": 1
         },
         "tilt": {
-          "state_topic": "camstack/camstack-zigbee:0x0017880109/cover_tilt",
-          "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_tilt/set",
+          "state_topic": "camstack/camstack-812/cover_tilt",
+          "command_topic": "camstack/camstack-812/cover_tilt/set",
           "min": 0,
           "max": 100,
           "step": 1
         },
         "open": {
-          "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_open/set"
+          "command_topic": "camstack/camstack-812/cover_open/set"
         },
         "close": {
-          "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_close/set"
+          "command_topic": "camstack/camstack-812/cover_close/set"
         },
         "stop": {
-          "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_stop/set"
+          "command_topic": "camstack/camstack-812/cover_stop/set"
         }
       }
     }
   },
   "dev": {
     "ids": [
-      "camstack-zigbee:0x0017880109"
+      "camstack-812"
     ],
     "name": "Tapparella salone",
     "mf": "IKEA",

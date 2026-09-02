@@ -1,9 +1,9 @@
 {
   "type": "entity_change",
-  "device_id": "camstack-ecowitt:1:tempinf",
+  "device_id": "camstack-291",
   "dev": {
     "ids": [
-      "camstack-ecowitt:1:tempinf"
+      "camstack-291"
     ],
     "name": "Indoor Temperature",
     "mf": "Ecowitt",
@@ -12,9 +12,9 @@
   "cmps": {
     "binary_sensor-online": {
       "platform": "binary_sensor",
-      "unique_id": "ecowitt:1:tempinf_online",
+      "unique_id": "291_online",
       "name": "Online",
-      "state_topic": "camstack/camstack-ecowitt:1:tempinf/online",
+      "state_topic": "camstack/camstack-291/online",
       "device_class": "connectivity",
       "entity_category": "diagnostic",
       "payload_on": "true",
@@ -22,18 +22,18 @@
     },
     "sensor-temperature-sensor": {
       "platform": "sensor",
-      "unique_id": "ecowitt:1:tempinf_temperature_sensor",
+      "unique_id": "291_temperature_sensor",
       "name": "Temperature sensor",
-      "state_topic": "camstack/camstack-ecowitt:1:tempinf/temperature_sensor",
+      "state_topic": "camstack/camstack-291/temperature_sensor",
       "device_class": "temperature",
       "unit_of_measurement": "°C",
       "enabled_by_default": false
     },
     "sensor-battery": {
       "platform": "sensor",
-      "unique_id": "ecowitt:1:tempinf_battery",
+      "unique_id": "291_battery",
       "name": "Battery",
-      "state_topic": "camstack/camstack-ecowitt:1:tempinf/battery",
+      "state_topic": "camstack/camstack-291/battery",
       "device_class": "battery",
       "unit_of_measurement": "%",
       "enabled_by_default": false

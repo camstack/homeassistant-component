@@ -416,7 +416,7 @@ async def test_a_control_the_native_entity_cannot_express_stays_beside_it(
     registry = er.async_get(hass)
     assert (
         registry.async_get_entity_id(
-            "switch", "camstack", "camstack_tado:BU123_climate_control_swing_vertical"
+            "switch", "camstack", "camstack_430_climate_control_swing_vertical"
         )
         is not None
     )
@@ -532,8 +532,8 @@ async def test_a_vacuum_keeps_the_sensors_its_platform_cannot_show(
     assert hass.states.get(VACUUM) is not None
     registry = er.async_get(hass)
     for unique_id in (
-        "camstack_roborock:s7_vacuum_control_battery",
-        "camstack_roborock:s7_vacuum_control_progress",
+        "camstack_407_vacuum_control_battery",
+        "camstack_407_vacuum_control_progress",
     ):
         assert registry.async_get_entity_id("sensor", "camstack", unique_id) is not None
 
@@ -611,23 +611,16 @@ async def test_the_degraded_entities_are_removed_and_the_operator_is_told(
     await setup_integration(hass, config_entry)
     await announce(hass, config_entry, ENTITY_CHANGE_COVER_LEGACY)
     registry = er.async_get(hass)
-    old = registry.async_get_entity_id(
-        "sensor", "camstack", "camstack_zigbee:0x0017880109_cover"
-    )
+    old = registry.async_get_entity_id("sensor", "camstack", "camstack_812_cover")
     assert old is not None
 
     await push(hass, config_entry, ENTITY_CHANGE_COVER)
 
     assert (
-        registry.async_get_entity_id(
-            "sensor", "camstack", "camstack_zigbee:0x0017880109_cover"
-        )
-        is None
+        registry.async_get_entity_id("sensor", "camstack", "camstack_812_cover") is None
     )
     assert (
-        registry.async_get_entity_id(
-            "cover", "camstack", "camstack_zigbee:0x0017880109_cover"
-        )
+        registry.async_get_entity_id("cover", "camstack", "camstack_812_cover")
         is not None
     )
     assert _notifications(hass), "the operator was not told the entity id moved"

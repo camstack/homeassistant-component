@@ -23,13 +23,12 @@ substream — carrying the `stream_target` verbatim, and this module builds one
 entity per component and hands that target straight back to `handleOffer`. No
 url crosses in either direction.
 
-**The membership entity is unchanged**, and the hub deliberately announces no
-component for the adaptive stream: that entity IS the adaptive stream, it has
-carried `camstack_<stableId>_camera` since the integration shipped, and a
-second component claiming the same identity would collide on it. So the
-operator's existing `camera.<name>` keeps its history and its place on a
-dashboard, and simply gains one sibling per profile and per substream — the
-streams membership cannot express.
+**The membership entity is unchanged in KIND**, and the hub deliberately
+announces no component for the adaptive stream: that entity IS the adaptive
+stream, it carries `camstack_<deviceId>_camera`, and a second component
+claiming the same identity would collide on it. So the operator's existing
+`camera.<name>` gains one sibling per profile and per substream — the streams
+membership cannot express.
 """
 
 from __future__ import annotations
@@ -312,16 +311,16 @@ class CamStackPushCamera(CamStackPushEntity, _CamStackCameraSession):
     def _camstack_device_id(self) -> int | None:
         """Return the hub's numeric id, from the MEMBERSHIP.
 
-        The push deliberately never carries a numeric id — every entity it
-        builds is keyed on the stable one, because numeric ids are reallocated
-        by a re-sync. `snapshot.getSnapshot` and `webrtcSession.handleOffer`
-        take the numeric one, so it is looked up through the coordinator by
-        the device key both halves already agree on.
+        The push carries no numeric id of its own: it carries the device
+        KEY, which is `camstack-<deviceId>`. `snapshot.getSnapshot` and
+        `webrtcSession.handleOffer` take the number, so it is looked up
+        through the coordinator by the key both halves agree on rather than
+        parsed back out of the key — parsing a wire format is how the two
+        sides stop agreeing on what it means.
 
-        Read live rather than captured at construction, for the same reason:
-        an entity survives a re-adoption on its `unique_id` while the number
-        behind it changes, and a captured value would then address whichever
-        camera inherited it.
+        Read live rather than captured at construction: an entity outlives
+        the membership answer that built it, and a captured value would go on
+        addressing a device the hub no longer exports.
         """
         coordinator = self._hub.entry.runtime_data.coordinator
         data = coordinator.data
@@ -371,10 +370,13 @@ class CamStackCamera(CoordinatorEntity[CamStackCoordinator], _CamStackCameraSess
         _CamStackCameraSession.__init__(self)
         self._device_id = device.device_id
         self._device_key = device.device_key
-        # Derived from the stable id, like every other entity the hub exports:
-        # a numeric id is reallocated by a re-sync, and an entity keyed on one
-        # would follow whichever camera inherited the number.
-        self._attr_unique_id = f"{DOMAIN}_{device.stable_id}_camera"
+        # `camstack_<deviceId>_camera` — the same numeric identity every
+        # entity the hub pushes is keyed on. The hub announces NO component
+        # for the adaptive stream precisely so this one owns the key: an
+        # announced `615_camera` reaches the registry as `camstack_615_camera`
+        # too, and Home Assistant drops the loser of that race. Pinned on the
+        # hub side by `camera-entities.spec.ts`.
+        self._attr_unique_id = f"{DOMAIN}_{device.device_id}_camera"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device.device_key)},
             name=device.name,

@@ -1,12 +1,12 @@
 {
   "type": "entity_change",
-  "device_id": "camstack-zigbee:0x0017880109",
+  "device_id": "camstack-812",
   "cmps": {
     "binary_sensor-online": {
       "platform": "binary_sensor",
-      "unique_id": "zigbee:0x0017880109_online",
+      "unique_id": "812_online",
       "name": "Online",
-      "state_topic": "camstack/camstack-zigbee:0x0017880109/online",
+      "state_topic": "camstack/camstack-812/online",
       "device_class": "connectivity",
       "entity_category": "diagnostic",
       "payload_on": "true",
@@ -14,17 +14,17 @@
     },
     "sensor-cover": {
       "platform": "sensor",
-      "unique_id": "zigbee:0x0017880109_cover",
+      "unique_id": "812_cover",
       "name": "Cover",
-      "state_topic": "camstack/camstack-zigbee:0x0017880109/cover",
+      "state_topic": "camstack/camstack-812/cover",
       "icon": "mdi:window-shutter"
     },
     "number-cover-position": {
       "platform": "number",
-      "unique_id": "zigbee:0x0017880109_cover_position",
+      "unique_id": "812_cover_position",
       "name": "Position",
-      "state_topic": "camstack/camstack-zigbee:0x0017880109/cover_position",
-      "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_position/set",
+      "state_topic": "camstack/camstack-812/cover_position",
+      "command_topic": "camstack/camstack-812/cover_position/set",
       "unit_of_measurement": "%",
       "icon": "mdi:arrow-up-down",
       "min": 0,
@@ -33,10 +33,10 @@
     },
     "number-cover-tilt": {
       "platform": "number",
-      "unique_id": "zigbee:0x0017880109_cover_tilt",
+      "unique_id": "812_cover_tilt",
       "name": "Tilt position",
-      "state_topic": "camstack/camstack-zigbee:0x0017880109/cover_tilt",
-      "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_tilt/set",
+      "state_topic": "camstack/camstack-812/cover_tilt",
+      "command_topic": "camstack/camstack-812/cover_tilt/set",
       "unit_of_measurement": "%",
       "icon": "mdi:angle-acute",
       "min": 0,
@@ -46,25 +46,25 @@
     },
     "button-cover-open": {
       "platform": "button",
-      "unique_id": "zigbee:0x0017880109_cover_open",
+      "unique_id": "812_cover_open",
       "name": "Open",
-      "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_open/set",
+      "command_topic": "camstack/camstack-812/cover_open/set",
       "icon": "mdi:arrow-up-box",
       "payload_press": "PRESS"
     },
     "button-cover-close": {
       "platform": "button",
-      "unique_id": "zigbee:0x0017880109_cover_close",
+      "unique_id": "812_cover_close",
       "name": "Close",
-      "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_close/set",
+      "command_topic": "camstack/camstack-812/cover_close/set",
       "icon": "mdi:arrow-down-box",
       "payload_press": "PRESS"
     },
     "button-cover-stop": {
       "platform": "button",
-      "unique_id": "zigbee:0x0017880109_cover_stop",
+      "unique_id": "812_cover_stop",
       "name": "Stop",
-      "command_topic": "camstack/camstack-zigbee:0x0017880109/cover_stop/set",
+      "command_topic": "camstack/camstack-812/cover_stop/set",
       "icon": "mdi:stop",
       "enabled_by_default": false,
       "payload_press": "PRESS"
@@ -72,7 +72,7 @@
   },
   "dev": {
     "ids": [
-      "camstack-zigbee:0x0017880109"
+      "camstack-812"
     ],
     "name": "Tapparella salone",
     "mf": "IKEA",

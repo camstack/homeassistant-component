@@ -172,7 +172,7 @@ async def test_a_platform_this_version_cannot_build_is_named(
     message = copy.deepcopy(ENTITY_CHANGE_CAMERA)
     message["cmps"]["alarm_control_panel-alarm"] = {
         "platform": "alarm_control_panel",
-        "unique_id": "hikvision:615_alarm",
+        "unique_id": "615_alarm",
         "name": "Alarm",
         "state_topic": topic("alarm"),
     }

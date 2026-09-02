@@ -10,6 +10,16 @@ by running the hub's OWN `entity-catalog.ts` — 51 components for a camera with
 one zone and PTZ, 3 for a derived sensor. Nothing in them was typed by hand,
 so a component key or a payload that this integration gets wrong here gets it
 wrong against the hub too.
+
+One edit has been applied to those recordings since: on 2026-09-02 the export
+moved every identity from `stableId` to the hub's NUMERIC device id, aligning
+Home Assistant with the Alexa, HomeKit and Google exports. The fixtures were
+rekeyed mechanically — `camstack-hikvision:615` → `camstack-615`,
+`hikvision:615_online` → `615_online` — because that substitution is exactly
+what the hub change does to its own output and nothing else in the shape moved.
+The `stableId` still present on the `deviceManager.listAll` payloads below is
+NOT a leftover: the hub still has one, and these tests prove this integration
+no longer reads it.
 """
 
 from __future__ import annotations

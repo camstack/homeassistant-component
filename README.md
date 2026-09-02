@@ -258,11 +258,13 @@ sensors, because Home Assistant's vacuum has nowhere to show them.
 
 ### One CamStack device, one Home Assistant device
 
-Identity is the hub's `device_id` (`camstack-<stableId>`), which is also what
+Identity is the hub's `device_id` (`camstack-<deviceId>`), which is also what
 the camera entity uses — so the live view and the sensors land on one device
-instead of two that look like duplicates. It is derived from the **stable** id
-rather than the numeric one: numeric ids are reallocated by a re-sync, and an
-entity keyed on one would follow whichever camera inherited the number.
+instead of two that look like duplicates. It is derived from the hub's
+**numeric** device id, the same identity CamStack's Alexa, HomeKit and Google
+exports use. Hub device ids are minted by a monotonic counter and are never
+re-issued, so a removed camera leaves an orphaned entity at worst — never one
+pointing at a different camera.
 
 ### Switches store nothing
 

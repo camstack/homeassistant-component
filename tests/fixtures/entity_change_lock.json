@@ -1,12 +1,12 @@
 {
   "type": "entity_change",
-  "device_id": "camstack-zwave:node-12",
+  "device_id": "camstack-512",
   "cmps": {
     "binary_sensor-online": {
       "platform": "binary_sensor",
-      "unique_id": "zwave:node-12_online",
+      "unique_id": "512_online",
       "name": "Online",
-      "state_topic": "camstack/camstack-zwave:node-12/online",
+      "state_topic": "camstack/camstack-512/online",
       "device_class": "connectivity",
       "entity_category": "diagnostic",
       "payload_on": "true",
@@ -14,15 +14,15 @@
     },
     "lock-lock-control": {
       "platform": "lock",
-      "unique_id": "zwave:node-12_lock_control",
+      "unique_id": "512_lock_control",
       "name": "Lock control",
-      "state_topic": "camstack/camstack-zwave:node-12/lock_control_state",
-      "command_topic": "camstack/camstack-zwave:node-12/lock_control/set"
+      "state_topic": "camstack/camstack-512/lock_control_state",
+      "command_topic": "camstack/camstack-512/lock_control/set"
     }
   },
   "dev": {
     "ids": [
-      "camstack-zwave:node-12"
+      "camstack-512"
     ],
     "name": "Porta ingresso",
     "mf": "Yale",

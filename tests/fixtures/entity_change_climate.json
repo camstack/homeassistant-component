@@ -1,12 +1,12 @@
 {
   "type": "entity_change",
-  "device_id": "camstack-tado:BU123",
+  "device_id": "camstack-430",
   "cmps": {
     "binary_sensor-online": {
       "platform": "binary_sensor",
-      "unique_id": "tado:BU123_online",
+      "unique_id": "430_online",
       "name": "Online",
-      "state_topic": "camstack/camstack-tado:BU123/online",
+      "state_topic": "camstack/camstack-430/online",
       "device_class": "connectivity",
       "entity_category": "diagnostic",
       "payload_on": "true",
@@ -14,10 +14,10 @@
     },
     "switch-climate-control-swing-vertical": {
       "platform": "switch",
-      "unique_id": "tado:BU123_climate_control_swing_vertical",
+      "unique_id": "430_climate_control_swing_vertical",
       "name": "Vertical swing",
-      "state_topic": "camstack/camstack-tado:BU123/climate_control_swing_vertical",
-      "command_topic": "camstack/camstack-tado:BU123/climate_control_swing_vertical/set",
+      "state_topic": "camstack/camstack-430/climate_control_swing_vertical",
+      "command_topic": "camstack/camstack-430/climate_control_swing_vertical/set",
       "icon": "mdi:arrow-up-down",
       "enabled_by_default": false,
       "payload_on": "true",
@@ -25,10 +25,10 @@
     },
     "switch-climate-control-swing-horizontal": {
       "platform": "switch",
-      "unique_id": "tado:BU123_climate_control_swing_horizontal",
+      "unique_id": "430_climate_control_swing_horizontal",
       "name": "Horizontal swing",
-      "state_topic": "camstack/camstack-tado:BU123/climate_control_swing_horizontal",
-      "command_topic": "camstack/camstack-tado:BU123/climate_control_swing_horizontal/set",
+      "state_topic": "camstack/camstack-430/climate_control_swing_horizontal",
+      "command_topic": "camstack/camstack-430/climate_control_swing_horizontal/set",
       "icon": "mdi:arrow-left-right",
       "enabled_by_default": false,
       "payload_on": "true",
@@ -36,10 +36,10 @@
     },
     "climate-climate-control": {
       "platform": "climate",
-      "unique_id": "tado:BU123_climate_control",
+      "unique_id": "430_climate_control",
       "name": "Climate control",
-      "state_topic": "camstack/camstack-tado:BU123/climate_control",
-      "command_topic": "camstack/camstack-tado:BU123/climate_control/set",
+      "state_topic": "camstack/camstack-430/climate_control",
+      "command_topic": "camstack/camstack-430/climate_control/set",
       "options": [
         "off",
         "heat",
@@ -47,42 +47,42 @@
       ],
       "controls": {
         "current_temperature": {
-          "state_topic": "camstack/camstack-tado:BU123/climate_control_current_temp"
+          "state_topic": "camstack/camstack-430/climate_control_current_temp"
         },
         "current_humidity": {
-          "state_topic": "camstack/camstack-tado:BU123/climate_control_current_humidity"
+          "state_topic": "camstack/camstack-430/climate_control_current_humidity"
         },
         "target_humidity": {
-          "state_topic": "camstack/camstack-tado:BU123/climate_control_target_humidity",
-          "command_topic": "camstack/camstack-tado:BU123/climate_control_target_humidity/set",
+          "state_topic": "camstack/camstack-430/climate_control_target_humidity",
+          "command_topic": "camstack/camstack-430/climate_control_target_humidity/set",
           "min": 0,
           "max": 100,
           "step": 1
         },
         "target": {
-          "state_topic": "camstack/camstack-tado:BU123/climate_control_target",
-          "command_topic": "camstack/camstack-tado:BU123/climate_control_target/set",
+          "state_topic": "camstack/camstack-430/climate_control_target",
+          "command_topic": "camstack/camstack-430/climate_control_target/set",
           "min": -20,
           "max": 90,
           "step": 0.5
         },
         "target_low": {
-          "state_topic": "camstack/camstack-tado:BU123/climate_control_target_low",
+          "state_topic": "camstack/camstack-430/climate_control_target_low",
           "min": -20,
           "max": 90,
           "step": 0.5
         },
         "target_high": {
-          "state_topic": "camstack/camstack-tado:BU123/climate_control_target_high",
+          "state_topic": "camstack/camstack-430/climate_control_target_high",
           "min": -20,
           "max": 90,
           "step": 0.5
         },
         "fan_mode": {
-          "state_topic": "camstack/camstack-tado:BU123/climate_control_fan_mode"
+          "state_topic": "camstack/camstack-430/climate_control_fan_mode"
         },
         "preset": {
-          "state_topic": "camstack/camstack-tado:BU123/climate_control_preset",
+          "state_topic": "camstack/camstack-430/climate_control_preset",
           "options": [
             "home",
             "away"
@@ -94,7 +94,7 @@
   },
   "dev": {
     "ids": [
-      "camstack-tado:BU123"
+      "camstack-430"
     ],
     "name": "Termostato salone",
     "mf": "Tado",

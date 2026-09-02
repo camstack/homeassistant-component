@@ -1,12 +1,12 @@
 {
   "type": "entity_change",
-  "device_id": "camstack-tuya:fan-401",
+  "device_id": "camstack-401",
   "cmps": {
     "binary_sensor-online": {
       "platform": "binary_sensor",
-      "unique_id": "tuya:fan-401_online",
+      "unique_id": "401_online",
       "name": "Online",
-      "state_topic": "camstack/camstack-tuya:fan-401/online",
+      "state_topic": "camstack/camstack-401/online",
       "device_class": "connectivity",
       "entity_category": "diagnostic",
       "payload_on": "true",
@@ -14,16 +14,16 @@
     },
     "fan-fan-control": {
       "platform": "fan",
-      "unique_id": "tuya:fan-401_fan_control",
+      "unique_id": "401_fan_control",
       "name": "Fan control",
-      "state_topic": "camstack/camstack-tuya:fan-401/fan_control",
-      "command_topic": "camstack/camstack-tuya:fan-401/fan_control/set",
+      "state_topic": "camstack/camstack-401/fan_control",
+      "command_topic": "camstack/camstack-401/fan_control/set",
       "min": 0,
       "max": 100,
       "step": 25,
       "controls": {
         "preset": {
-          "state_topic": "camstack/camstack-tuya:fan-401/fan_control_preset",
+          "state_topic": "camstack/camstack-401/fan_control_preset",
           "options": [
             "auto",
             "quiet",
@@ -31,19 +31,19 @@
           ]
         },
         "oscillation": {
-          "state_topic": "camstack/camstack-tuya:fan-401/fan_control_oscillating",
-          "command_topic": "camstack/camstack-tuya:fan-401/fan_control_oscillating/set"
+          "state_topic": "camstack/camstack-401/fan_control_oscillating",
+          "command_topic": "camstack/camstack-401/fan_control_oscillating/set"
         },
         "direction": {
-          "state_topic": "camstack/camstack-tuya:fan-401/fan_control_direction",
-          "command_topic": "camstack/camstack-tuya:fan-401/fan_control_direction/set"
+          "state_topic": "camstack/camstack-401/fan_control_direction",
+          "command_topic": "camstack/camstack-401/fan_control_direction/set"
         }
       }
     }
   },
   "dev": {
     "ids": [
-      "camstack-tuya:fan-401"
+      "camstack-401"
     ],
     "name": "Ventilatore studio",
     "mf": "CamStack",
