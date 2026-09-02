@@ -89,9 +89,7 @@ class StaleDevicePruner:
         stale_now: set[str] = set()
         removable: list[tuple[str, set[str]]] = []
 
-        for device in dr.async_entries_for_config_entry(
-            registry, self._entry.entry_id
-        ):
+        for device in dr.async_entries_for_config_entry(registry, self._entry.entry_id):
             ours = camstack_keys(device)
             if not ours or not ours.isdisjoint(live):
                 continue

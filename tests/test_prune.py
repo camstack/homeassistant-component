@@ -129,7 +129,9 @@ async def test_a_failed_refresh_disarms_the_count() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("key", sorted(SYNTHETIC_DEVICE_KEYS))
 async def test_the_synthetic_devices_are_never_pruned(key: str) -> None:
-    """They are pushed regardless of the membership, so they are never in the
+    """Spare the synthetic devices.
+
+    They are pushed regardless of the membership, so they are never in the
     listing — and deleting one would only have the next push rebuild it.
     """
     registry = _Registry([_registry_entry(key)])
