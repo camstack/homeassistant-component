@@ -105,6 +105,20 @@ EXPORT_PANEL_HINT: Final = (
 # SAME Home Assistant device instead of two that look like duplicates.
 DEVICE_KEY_PREFIX: Final = "camstack-"
 
+# The hub's SYNTHETIC devices — the ones that are not cameras and are pushed
+# regardless of the export membership: the notification centre and the server
+# itself. A WIRE FORMAT, mirroring `ha-export/synthetic-devices.ts`.
+#
+# They matter here because they never appear in the export listing, so "not
+# exported" is not the same question as "not live" for them. Deleting one would
+# only have the next push build it again.
+SYNTHETIC_DEVICE_KEYS: Final = frozenset(
+    {
+        f"{DEVICE_KEY_PREFIX}synthetic-notification-center",
+        f"{DEVICE_KEY_PREFIX}synthetic-server",
+    }
+)
+
 # The hub's heartbeat cadence (`HEARTBEAT_INTERVAL_MS`). It doubles as the
 # availability signal, and it is the ONLY one: there is deliberately no second
 # source that could disagree about whether camstack is alive.

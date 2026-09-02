@@ -30,7 +30,13 @@ from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.device_registry import DeviceEntry
 
 from .api import CamStackAuth, CamStackClient, PasswordAuth
-from .const import CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL, DEVICE_KEY_PREFIX, DOMAIN
+from .const import (
+    CONF_VERIFY_SSL,
+    DEFAULT_VERIFY_SSL,
+    DEVICE_KEY_PREFIX,
+    DOMAIN,
+    SYNTHETIC_DEVICE_KEYS,
+)
 from .coordinator import (
     CamStackConfigEntry,
     CamStackCoordinator,
@@ -155,7 +161,13 @@ async def async_remove_config_entry_device(
     data = coordinator.data
     if data is None:
         return False
-    exported_keys = {device.device_key for device in data.devices.values()}
+    # The synthetic devices (notification centre, server) are pushed regardless
+    # of the membership, so they are never in this listing — "not exported" is
+    # not "not live" for them, and deleting one would only have the next push
+    # build it again. They are live by construction.
+    exported_keys = {device.device_key for device in data.devices.values()} | set(
+        SYNTHETIC_DEVICE_KEYS
+    )
     ours = {
         identifier
         for domain, identifier in device_entry.identifiers

@@ -20,7 +20,7 @@ import pytest
 from homeassistant.helpers.device_registry import DeviceEntry
 
 from custom_components.camstack import async_remove_config_entry_device
-from custom_components.camstack.const import DOMAIN
+from custom_components.camstack.const import DOMAIN, SYNTHETIC_DEVICE_KEYS
 from custom_components.camstack.coordinator import CamStackData, CamStackDevice
 
 
@@ -109,3 +109,21 @@ async def test_a_device_that_is_not_ours_is_refused() -> None:
     foreign.identifiers = {("othervendor", "whatever-1")}
 
     assert await async_remove_config_entry_device(None, entry, foreign) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", sorted(SYNTHETIC_DEVICE_KEYS))
+async def test_a_live_synthetic_device_is_refused(key: str) -> None:
+    """Refuse the notification centre and the server.
+
+    They are pushed regardless of the export membership, so they never appear
+    in the listing — "not exported" is not "not live" for them. Without this the
+    hook offered to delete the two devices carrying most of the operator's
+    entities, and the next push would simply build them again.
+    """
+    entry = _entry([_device(615, "Ingresso")])
+
+    assert (
+        await async_remove_config_entry_device(None, entry, _registry_device(key))
+        is False
+    )
