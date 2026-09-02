@@ -23,7 +23,7 @@ from homeassistant.const import (
     CONF_USERNAME,
     Platform,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
@@ -45,6 +45,7 @@ from .coordinator import (
 from .frontend import async_remove_panel, async_setup_frontend
 from .migration import async_migrate_entry, entry_has_credentials, entry_is_oauth
 from .oauth import CamStackOAuth2Implementation, OAuth2Auth
+from .prune import StaleDevicePruner
 from .push import CamStackPushHub
 from .push_view import async_register_push_view, async_unregister_push_hub
 from .version_view import async_register_version_view
@@ -113,6 +114,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: CamStackConfigEntry) -> 
     entry.runtime_data = CamStackRuntimeData(
         client=client, push=push, coordinator=coordinator
     )
+
+    # A device the hub stopped exporting has no way of saying so — the push
+    # protocol carries no removal — so it is cleaned up from this side, and only
+    # when two consecutive successful reads agree. See `prune.py`.
+    pruner = StaleDevicePruner(hass, entry)
+
+    @callback
+    def _async_prune_stale_devices() -> None:
+        data = coordinator.data
+        if data is None:
+            pruner.async_forget()
+            return
+        pruner.async_apply(data)
+
+    entry.async_on_unload(coordinator.async_add_listener(_async_prune_stale_devices))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     # Only now: a push arriving before the platforms exist has nowhere to put
