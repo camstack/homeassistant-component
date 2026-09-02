@@ -27,9 +27,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.helpers.device_registry import DeviceEntry
 
 from .api import CamStackAuth, CamStackClient, PasswordAuth
-from .const import CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL, DOMAIN
+from .const import CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL, DEVICE_KEY_PREFIX, DOMAIN
 from .coordinator import (
     CamStackConfigEntry,
     CamStackCoordinator,
@@ -123,6 +124,46 @@ async def async_unload_entry(hass: HomeAssistant, entry: CamStackConfigEntry) ->
     if isinstance(runtime, CamStackRuntimeData):
         runtime.push.async_stop()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant,
+    entry: CamStackConfigEntry,
+    device_entry: DeviceEntry,
+) -> bool:
+    """Allow deleting a camstack device that the hub no longer exports.
+
+    Without this hook Home Assistant draws no delete button at all: a device
+    belonging to a config entry can only be removed if its integration says so.
+    The operator's only recourse was deleting the whole integration, and every
+    camera ever exported stayed in the registry for good — with its entities,
+    its area and its history — long after the hub stopped exporting it.
+
+    **Only a device the hub does NOT currently export may go.** The membership
+    is the authority; this hook is the gesture. A device that is still exported
+    is refused, because deleting it would leave the hub pushing state at a
+    registry entry that no longer exists.
+
+    **An unanswered coordinator refuses.** `data is None` means the listing has
+    not been read yet, not that the hub exports nothing — and an empty listing
+    read once, transiently, would otherwise authorise deleting the operator's
+    entire fleet. This is a one-shot destructive action, so it never gates on a
+    read that can fail: unknown is a refusal, and the operator can try again a
+    moment later.
+    """
+    coordinator = entry.runtime_data.coordinator
+    data = coordinator.data
+    if data is None:
+        return False
+    exported_keys = {device.device_key for device in data.devices.values()}
+    ours = {
+        identifier
+        for domain, identifier in device_entry.identifiers
+        if domain == DOMAIN and identifier.startswith(DEVICE_KEY_PREFIX)
+    }
+    if not ours:
+        return False
+    return ours.isdisjoint(exported_keys)
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: CamStackConfigEntry) -> None:
