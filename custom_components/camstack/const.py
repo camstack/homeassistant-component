@@ -55,7 +55,43 @@ PANEL_URL_PATH: Final = "camstack"
 PANEL_COMPONENT_NAME: Final = "camstack-panel"
 PANEL_FILENAME: Final = "camstack-panel.js"
 CARD_FILENAME: Final = "camstack-grid-card.js"
+EVENTS_CARD_FILENAME: Final = "camstack-events-card.js"
+# Every Lovelace card this integration ships. One list, so registering a card
+# and shipping it cannot drift apart.
+CARD_FILENAMES: Final = (CARD_FILENAME, EVENTS_CARD_FILENAME)
 CONFIG_VIEW_URL: Final = "/api/camstack/config"
+
+# --- The embed the cards frame -------------------------------------------
+#
+# A WIRE FORMAT, owned by the viewer: `camstack/shared/embed-path.ts`. The
+# pipeline-orchestrator addon serves it off the hub's own origin, so the cards
+# only ever compose `<hub base URL><this path>?mode=…`.
+VIEWER_EMBED_PATH: Final = "/viewer/camstack/embed/index.html"
+
+# Where a card asks for the credential its iframe needs. The integration holds
+# the hub's OAuth token and never hands it to a browser: it mints a SHARE token
+# instead, scoped to a view kind and to an explicit list of device ids.
+EMBED_TOKEN_VIEW_URL: Final = "/api/camstack/embed_token"
+
+# The hub's minting mutation, and the two scope kinds it accepts.
+# `auth.createShareToken` -> `{ id, token, expiresAt }`.
+SHARE_TOKEN_MUTATION: Final = "auth.createShareToken"
+SHARE_SCOPE_GRID: Final = "grid-view"
+SHARE_SCOPE_EVENTS: Final = "events-view"
+SHARE_SCOPE_KINDS: Final = frozenset({SHARE_SCOPE_GRID, SHARE_SCOPE_EVENTS})
+
+# The hub caps a share scope at 64 device ids (`deviceIds` max in
+# `auth.router.ts`). Refusing here names the limit; letting the hub refuse
+# would surface as an opaque BAD_REQUEST on a dashboard.
+SHARE_SCOPE_MAX_DEVICES: Final = 64
+
+# A share token is a BEARER credential that leaves Home Assistant: it lives in
+# the browser of whoever opens the dashboard, and it is valid against the hub
+# on its own. So it is short-lived and re-minted, never `ttlSec: "never"`.
+SHARE_TOKEN_TTL: Final = timedelta(hours=1)
+# Re-mint this long before expiry, so a card that has been open all along does
+# not hand its iframe a credential that dies mid-stream.
+SHARE_TOKEN_RENEW_MARGIN: Final = timedelta(minutes=5)
 
 MANUFACTURER: Final = "CamStack"
 

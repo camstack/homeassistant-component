@@ -278,9 +278,17 @@ writes exactly what the CamStack UI writes and the two cannot drift.
 - A write the hub refuses raises an error and confirms nothing. An accepted one
   shows immediately and is corrected by the hub's next push if it disagreed.
 
-## The Lovelace card
+## The Lovelace cards
 
-Add the card from the dashboard editor ("CamStack Grid"), or in YAML:
+Two cards ship with the integration and are registered as Lovelace resources
+automatically. Both frame the **viewer's own embed** off the hub
+(`/viewer/camstack/embed/index.html`), so a dashboard shows the same player the
+CamStack apps do.
+
+Both have a UI editor: add them from the dashboard's card picker ("CamStack
+Grid", "CamStack Events") and pick cameras with checkboxes.
+
+### `camstack-grid-card` — a live wall
 
 ```yaml
 type: custom:camstack-grid-card
@@ -288,28 +296,94 @@ title: Ingresso
 entities:
   - camera.videocamera_ingresso
   - camera.videocamera_giardino
-height: 420
+layout: auto
+aspect_ratio: "16:9"
 ```
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `entities` | — | Camera entities to show. Their friendly names are what the hub grid is asked for |
-| `grid_id` | — | An existing CamStack grid, instead of `entities` |
-| `height` | `400` | Card height in pixels |
-| `audio` | `true` | Set `false` to mute |
-| `resolution` | — | Passed through to the hub |
+| `entities` | — | CamStack camera entities, in tile order. Their Home Assistant names caption the tiles |
+| `device_ids` | — | Hub device ids, when a camera has no entity. `entities` wins if both are set |
+| `title` | — | `ha-card` header |
+| `layout` | `auto` | `auto`, or a fixed column count (1–6) |
+| `aspect_ratio` | `16:9` | `16:9`, `4:3`, `3:2`, `1:1`, or `none` to use `height` |
+| `height` | `400` | Card height in pixels, used when `aspect_ratio: none` |
+| `quality` | `auto` | `auto`, `high`, `mid`, `low` |
+| `show_names` | `true` | Overlay the camera name on each tile |
+| `show_boxes` | `false` | Live detection boxes |
+| `active_only` | `false` | Only cameras currently active |
 | `url_base` | — | Override the hub address. Leave empty: the card asks the integration |
 
-The card resource is registered automatically when Lovelace stores its
+### `camstack-events-card` — the detections reel
+
+```yaml
+type: custom:camstack-events-card
+title: Ultimi eventi
+view: reel
+thumb: small
+rows: 1
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `entities` | *every exported camera* | Cameras to report on |
+| `device_ids` | — | Hub device ids, as above |
+| `view` | `reel` | `reel` (horizontal strip) or `gallery` |
+| `thumb` | `small` | `small`, `medium`, `large` |
+| `rows` | `1` | Reel depth, 1–6 |
+| `columns` | `auto` | Gallery columns |
+| `height` | *fitted* | Pixels. Left empty the reel height is COMPUTED from `thumb` and `rows` — the hub's card is a fixed size and a shorter frame silently cuts the timestamp off every card |
+| `classes` | — | Object classes, e.g. `[person, vehicle]` |
+| `search` | — | Free-text search |
+| `theme` | `auto` | `auto`, `dark`, `light` |
+| `url_base` | — | Hub address override |
+
+### How the cards authenticate
+
+The integration holds the hub's OAuth credential and **never puts it in a
+browser**. Each card asks `POST /api/camstack/embed_token` for a hub SHARE
+token, scoped to a view kind (`grid-view` / `events-view`) and to the explicit
+device ids that card shows, valid for one hour and re-minted as it ages. The
+endpoint refuses any device this entry does not export as a camera, so a
+dashboard cannot become a general-purpose minting endpoint for the hub.
+
+**Known gap — event thumbnails.** The hub's event-media plane accepts a session
+or scoped token and answers `401` to a share token, even for a device inside
+that token's own scope. Until that gate accepts a scoped share token, the events
+card lists its detections with text and badges and **without the pictures**.
+
+### YAML-mode dashboards
+
+The card resources are registered automatically when Lovelace stores its
 resources. In **YAML mode** the resource list is your file and this component
-does not write to it — add it yourself:
+does not write to it — add both yourself:
 
 ```yaml
 lovelace:
   resources:
     - url: /camstack-frontend/camstack-grid-card.js
       type: module
+    - url: /camstack-frontend/camstack-events-card.js
+      type: module
 ```
+
+## The hub certificate, and the blank sidebar panel
+
+The hub serves HTTPS with a leaf signed by its own root, `CamStack Local CA`.
+A browser that does not trust that root **refuses the panel's iframe silently**:
+a subframe gets no "proceed anyway" interstitial, an error document is committed
+instead, and that commit fires the iframe's `load` event — so nothing in the
+page can tell success from refusal. The result is a white rectangle.
+
+This is also why a panel that worked yesterday goes blank: the exception a
+browser stores is tied to that exact certificate, and the hub reissues one when
+its material can no longer do its job.
+
+The panel now probes the hub with a `fetch()` before trusting the frame and
+explains the failure instead of showing white. To fix it for good, install the
+hub's CA on the device: **CamStack admin UI → Settings → Network → download the
+CA certificate**, then add it to that device's trust store. Clicking through the
+warning once in a top-level tab works too, until the next reissue.
 
 ## What is deliberately not an entity
 
