@@ -6,7 +6,7 @@ forgot to fetch produces a green suite over a broken integration, so the
 fixtures are recordings and the assertions are about behaviour.
 
 The `entity_change` fixtures in `fixtures/` go one better: they were generated
-by running the hub's OWN `entity-catalog.ts` — 51 components for a camera with
+by running the hub's OWN `entity-catalog.ts` — 50 components for a camera with
 one zone and PTZ, 3 for a derived sensor. Nothing in them was typed by hand,
 so a component key or a payload that this integration gets wrong here gets it
 wrong against the hub too.

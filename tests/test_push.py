@@ -42,7 +42,7 @@ from .conftest import (
 TRIGGERED = "binary_sensor.videocamera_ingresso_triggered"
 PERSON = "binary_sensor.videocamera_ingresso_person_detected"
 CAMERA_SWITCH = "switch.videocamera_ingresso_camera"
-SNOOZE = "select.videocamera_ingresso_snooze_notifications"
+PTZ_PRESET = "select.videocamera_ingresso_ptz_preset"
 REBOOT = "button.videocamera_ingresso_reboot"
 
 
@@ -251,13 +251,17 @@ async def test_a_binary_value_is_matched_case_insensitively(
 async def test_a_select_offers_the_options_the_hub_sent(
     hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
 ) -> None:
-    """The snooze durations are the hub's, not this component's."""
+    """The PTZ preset names are the hub's, not this component's.
+
+    Snooze left the export on 2026-09-05 (hub D358); the preset select is
+    the camera's remaining select.
+    """
     await setup_integration(hass, config_entry)
     await push(hass, config_entry, ENTITY_CHANGE_CAMERA)
     await alive(hass, config_entry)
 
-    options = hass.states.get(SNOOZE).attributes["options"]
-    assert options == ENTITY_CHANGE_CAMERA["cmps"]["select-snooze"]["options"]
+    options = hass.states.get(PTZ_PRESET).attributes["options"]
+    assert options == ENTITY_CHANGE_CAMERA["cmps"]["select-ptz-preset"]["options"]
 
 
 # --- availability ----------------------------------------------------------

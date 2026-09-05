@@ -274,7 +274,7 @@ async def test_a_hub_that_announces_no_stream_still_gets_its_camera(
 ) -> None:
     """A hub older than the per-stream announce loses nothing.
 
-    Its `entity_change` carries 51 components and not one `camera`, which is
+    Its `entity_change` carries 50 components and not one `camera`, which is
     exactly what the shipped hub sent. The camera comes from the membership
     either way — the streams are additive.
     """

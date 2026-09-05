@@ -72,23 +72,6 @@
       "device_class": "timestamp",
       "icon": "mdi:clock"
     },
-    "select-snooze": {
-      "platform": "select",
-      "unique_id": "615_snooze",
-      "name": "Snooze notifications",
-      "state_topic": "camstack/camstack-615/snooze",
-      "command_topic": "camstack/camstack-615/snooze/set",
-      "options": [
-        "Off",
-        "15 minutes",
-        "30 minutes",
-        "1 hour",
-        "2 hours",
-        "4 hours",
-        "8 hours",
-        "24 hours"
-      ]
-    },
     "binary_sensor-motion-detected": {
       "platform": "binary_sensor",
       "unique_id": "615_motion_detected",
