@@ -1,18 +1,101 @@
 /**
  * CamStack grid card for Lovelace.
  *
- * The hub address is NOT a card option by default: the card asks the
- * integration (`/api/camstack/config`) which hub is configured. `url_base`
- * stays available as an override for setups whose browser reaches the hub at a
- * different address than Home Assistant does.
+ * Frames the viewer's own embed bundle
+ * (`<hub>/viewer/camstack/embed/index.html?mode=grid`) — the same player the
+ * CamStack apps use — and drives its host handshake.
  *
- * The iframe is rebuilt only when the computed URL changes. Rebuilding it on
- * every `hass` update — which arrives several times a second on a busy
- * instance — restarts the video stream each time.
+ * ## Why a handshake and not a share link
+ *
+ * The embed has two configuration sources: a `#t=`-carrying share URL, and the
+ * `embed-ready` → `embed-config` postMessage handshake. The grid page reads the
+ * URL source ONLY when it is not inside an iframe (`EmbedGridPage` does not
+ * pass `urlFirst`), so a `<iframe src="…#t=…">` grid hangs for ten seconds and
+ * then reports "config handshake timed out". A card must answer the handshake.
+ *
+ * ## Where the token comes from
+ *
+ * Not from here. The integration holds the hub's OAuth credential and mints a
+ * short-lived, device-scoped `grid-view` share token on request
+ * (`POST /api/camstack/embed_token`). This file never sees an account
+ * credential and never stores the one it gets.
+ *
+ * ## Why the iframe is rebuilt so rarely
+ *
+ * `set hass` fires several times a second on a busy instance. Rebuilding the
+ * iframe restarts every WebRTC session on the wall, so the frame is recreated
+ * only when the composed URL changes; a changed device list or layout is sent
+ * over the open channel instead.
  */
 const CARD_TAG = "camstack-grid-card";
 const EDITOR_TAG = "camstack-grid-card-editor";
+const EMBED_PATH = "/viewer/camstack/embed/index.html";
 const DEFAULT_HEIGHT = 400;
+const DEFAULT_ASPECT = "16:9";
+/** Re-mint this long before the token dies, so a stream never drops on expiry. */
+const TOKEN_RENEW_MARGIN_MS = 120000;
+
+const ASPECT_RATIOS = {
+  "16:9": 16 / 9,
+  "4:3": 4 / 3,
+  "3:2": 3 / 2,
+  "1:1": 1,
+};
+
+/** The hub device id Home Assistant records on a CamStack camera entity. */
+function deviceIdOf(hass, entityId) {
+  const state = hass && hass.states && hass.states[entityId];
+  const raw = state && state.attributes && state.attributes.camstack_device_id;
+  return Number.isInteger(raw) ? raw : null;
+}
+
+function friendlyName(hass, entityId) {
+  const state = hass && hass.states && hass.states[entityId];
+  return (
+    (state && state.attributes && state.attributes.friendly_name) || entityId
+  );
+}
+
+/**
+ * The device ids a config asks for, in the order the operator wrote them.
+ *
+ * `entities` wins over `device_ids` when both are present: an entity id
+ * survives a hub renumbering and a raw id does not.
+ */
+function resolveDeviceIds(hass, config) {
+  const ids = [];
+  const push = (value) => {
+    if (Number.isInteger(value) && value >= 0 && !ids.includes(value)) {
+      ids.push(value);
+    }
+  };
+  if (Array.isArray(config.entities)) {
+    for (const entityId of config.entities) {
+      push(deviceIdOf(hass, entityId));
+    }
+  }
+  if (!ids.length && Array.isArray(config.device_ids)) {
+    for (const value of config.device_ids) {
+      push(typeof value === "string" ? parseInt(value, 10) : value);
+    }
+  }
+  return ids;
+}
+
+/** Tile captions, so the wall reads with Home Assistant's names, not the hub's. */
+function resolveLabels(hass, config) {
+  const labels = {};
+  if (!Array.isArray(config.entities)) {
+    return labels;
+  }
+  for (const entityId of config.entities) {
+    const id = deviceIdOf(hass, entityId);
+    if (id !== null) {
+      labels[String(id)] = friendlyName(hass, entityId);
+    }
+  }
+  return labels;
+}
 
 class CamstackGridCard extends HTMLElement {
   constructor() {
@@ -21,14 +104,31 @@ class CamstackGridCard extends HTMLElement {
     this._config = {};
     this._hass = null;
     this._resolvedBase = null;
-    this._resolving = null;
-    this._renderedUrl = null;
+    this._entryId = null;
+    this._resolving = false;
+    this._renderedKey = null;
     this._iframe = null;
+    this._status = null;
+    this._token = null;
+    this._tokenExpiresAt = 0;
+    this._tokenKey = null;
+    this._pendingToken = null;
+    this._sentConfigKey = null;
+    this._onMessage = this._onMessage.bind(this);
+  }
+
+  connectedCallback() {
+    window.addEventListener("message", this._onMessage);
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener("message", this._onMessage);
   }
 
   setConfig(config) {
     this._config = config || {};
-    this._renderedUrl = null;
+    this._renderedKey = null;
+    this._sentConfigKey = null;
     this._render();
   }
 
@@ -42,27 +142,32 @@ class CamstackGridCard extends HTMLElement {
   }
 
   getCardSize() {
-    return Math.ceil((this._config.height || DEFAULT_HEIGHT) / 50);
+    return Math.ceil(this._frameHeight() / 50);
   }
 
+  // ── hub address ──────────────────────────────────────────────────────────
+
   async _resolveBase() {
-    if (this._resolving || this._config.url_base) {
+    if (this._resolving) {
       return;
     }
-    this._resolving = this._hass
-      .callApi("GET", "camstack/config")
-      .then((result) => {
-        const entries = (result && result.entries) || [];
-        this._resolvedBase = entries.length ? entries[0].url_base : null;
-        this._render();
-      })
-      .catch(() => {
-        // The integration is not loaded, or this user may not call it. Either
-        // way the card falls back to its own `url_base`, and says so when it
-        // has none.
-        this._resolvedBase = null;
-        this._render();
-      });
+    this._resolving = true;
+    try {
+      const result = await this._hass.callApi("GET", "camstack/config");
+      const entries = (result && result.entries) || [];
+      const wanted = this._config.entry_id;
+      const entry =
+        entries.find((item) => !wanted || item.entry_id === wanted) || null;
+      this._resolvedBase = entry ? entry.url_base : null;
+      this._entryId = entry ? entry.entry_id : null;
+    } catch {
+      // The integration is not loaded, or this user may not call it. The card
+      // falls back to its own `url_base`, and says so when it has none.
+      this._resolvedBase = null;
+    } finally {
+      this._resolving = false;
+      this._render();
+    }
   }
 
   _baseUrl() {
@@ -70,73 +175,207 @@ class CamstackGridCard extends HTMLElement {
     return explicit || this._resolvedBase || null;
   }
 
-  _gridUrl() {
-    const base = this._baseUrl();
-    if (!base) {
-      return null;
+  // ── the credential ───────────────────────────────────────────────────────
+
+  async _token_for(deviceIds) {
+    const key = deviceIds.join(",");
+    const fresh =
+      this._token !== null &&
+      this._tokenKey === key &&
+      (this._tokenExpiresAt === null ||
+        this._tokenExpiresAt - Date.now() > TOKEN_RENEW_MARGIN_MS);
+    if (fresh) {
+      return this._token;
     }
-    const params = new URLSearchParams();
-    const entities = this._config.entities;
-    if (Array.isArray(entities) && entities.length) {
-      const names = entities.map((entityId) => {
-        const state = this._hass && this._hass.states[entityId];
-        return (
-          (state && state.attributes && state.attributes.friendly_name) ||
-          entityId.split(".")[1] ||
-          entityId
-        );
+    if (this._pendingToken && this._tokenKey === key) {
+      return this._pendingToken;
+    }
+    this._tokenKey = key;
+    this._pendingToken = this._hass
+      .callApi("POST", "camstack/embed_token", {
+        kind: "grid-view",
+        device_ids: deviceIds,
+        ...(this._entryId ? { entry_id: this._entryId } : {}),
+      })
+      .then((result) => {
+        this._token = (result && result.token) || null;
+        this._tokenExpiresAt =
+          result && typeof result.expires_at === "number"
+            ? result.expires_at * 1000
+            : null;
+        return this._token;
+      })
+      .finally(() => {
+        this._pendingToken = null;
       });
-      params.set("cameras", names.join(","));
-    } else if (this._config.grid_id) {
-      params.set("gridId", this._config.grid_id);
-    } else if (this._config.cameras) {
-      params.set("cameras", this._config.cameras);
+    return this._pendingToken;
+  }
+
+  // ── the handshake ────────────────────────────────────────────────────────
+
+  _onMessage(event) {
+    if (!this._iframe || event.source !== this._iframe.contentWindow) {
+      return;
     }
-    if (this._config.audio !== false) {
-      params.set("audio", "1");
+    const data = event.data;
+    if (!data || typeof data !== "object") {
+      return;
     }
-    if (this._config.resolution) {
-      params.set("resolution", this._config.resolution);
+    if (data.type === "embed-ready" && data.mode === "grid") {
+      this._sentConfigKey = null;
+      this._sendConfig();
+      return;
     }
-    const query = params.toString();
-    return `${base}/grid-live${query ? `?${query}` : ""}`;
+    if (data.type === "state" && data.state === "error") {
+      this._setStatus(data.message || "The CamStack embed reported an error.");
+    } else if (data.type === "state" && data.state === "ready") {
+      this._setStatus(null);
+    }
+  }
+
+  async _sendConfig() {
+    const base = this._baseUrl();
+    const deviceIds = resolveDeviceIds(this._hass, this._config);
+    if (!base || !deviceIds.length || !this._iframe) {
+      return;
+    }
+    let token;
+    try {
+      token = await this._token_for(deviceIds);
+    } catch (err) {
+      this._setStatus(
+        `CamStack refused a viewing token: ${(err && err.message) || err}`
+      );
+      return;
+    }
+    if (!token || !this._iframe) {
+      this._setStatus("CamStack did not issue a viewing token.");
+      return;
+    }
+    const config = {
+      serverUrl: base,
+      token,
+      devices: deviceIds,
+      layout: this._layout(),
+      quality: this._config.quality || "auto",
+      showName: this._config.show_names !== false,
+      showBadges: this._config.show_badges !== false,
+      muted: this._config.muted !== false,
+      paused: false,
+      labels: resolveLabels(this._hass, this._config),
+      ...(this._config.active_only === true ? { activeOnly: true } : {}),
+      ...(this._config.show_boxes === true ? { showBoxes: true } : {}),
+    };
+    const key = JSON.stringify({ ...config, token: undefined });
+    if (key === this._sentConfigKey) {
+      return;
+    }
+    this._sentConfigKey = key;
+    // Targeted at the hub's origin, never "*": this message carries the token.
+    this._iframe.contentWindow.postMessage(
+      { type: "embed-config", config },
+      new URL(base).origin
+    );
+  }
+
+  _layout() {
+    const raw = this._config.layout;
+    if (raw === undefined || raw === null || raw === "auto" || raw === "") {
+      return "auto";
+    }
+    const columns = typeof raw === "string" ? parseInt(raw, 10) : raw;
+    return Number.isInteger(columns) && columns >= 1 ? columns : "auto";
+  }
+
+  // ── rendering ────────────────────────────────────────────────────────────
+
+  _frameHeight() {
+    return Number(this._config.height) > 0
+      ? Number(this._config.height)
+      : DEFAULT_HEIGHT;
+  }
+
+  _frameStyle() {
+    const aspect = this._config.aspect_ratio || DEFAULT_ASPECT;
+    if (aspect !== "none" && ASPECT_RATIOS[aspect]) {
+      // `aspect-ratio` keeps the wall the right shape on a phone and on a wall
+      // display without the operator retyping a pixel height per breakpoint.
+      return `width:100%;aspect-ratio:${aspect.replace(":", " / ")};border:none;display:block;border-radius:8px;`;
+    }
+    return `width:100%;height:${this._frameHeight()}px;border:none;display:block;border-radius:8px;`;
+  }
+
+  _setStatus(text) {
+    if (!this._status) {
+      return;
+    }
+    this._status.textContent = text || "";
+    this._status.style.display = text ? "block" : "none";
   }
 
   _render() {
-    const url = this._gridUrl();
-    if (url === this._renderedUrl) {
-      return;
-    }
-    this._renderedUrl = url;
+    const base = this._baseUrl();
+    const deviceIds = this._hass
+      ? resolveDeviceIds(this._hass, this._config)
+      : [];
+    // Only the frame's OWN inputs are in the key. The device list travels over
+    // the open channel; putting it here would restart every stream on a rename.
+    const key = base ? `${base}${EMBED_PATH}?mode=grid` : null;
 
+    if (key !== this._renderedKey) {
+      this._renderedKey = key;
+      this._sentConfigKey = null;
+      this._buildCard(key);
+    }
+    if (this._iframe) {
+      this._iframe.style.cssText = this._frameStyle();
+    }
+    if (base && !deviceIds.length) {
+      this._setStatus(
+        "No CamStack cameras selected. Pick camera entities, or set device_ids."
+      );
+    } else if (this._iframe) {
+      this._sendConfig();
+    }
+  }
+
+  _buildCard(frameUrl) {
     const card = document.createElement("ha-card");
     if (this._config.title) {
       card.setAttribute("header", this._config.title);
     }
+    const wrapper = document.createElement("div");
+    wrapper.style.cssText = "position:relative;padding:8px;";
 
-    if (!url) {
+    if (!frameUrl) {
       const empty = document.createElement("div");
       empty.style.cssText = "padding:16px;color:var(--secondary-text-color);";
       empty.textContent = this._resolving
         ? "Waiting for the CamStack integration…"
         : "No CamStack hub configured. Add the CamStack integration, or set url_base on this card.";
-      card.appendChild(empty);
+      wrapper.appendChild(empty);
+      card.appendChild(wrapper);
       this.shadowRoot.replaceChildren(card);
       this._iframe = null;
+      this._status = null;
       return;
     }
 
-    const wrapper = document.createElement("div");
-    wrapper.style.cssText = "position:relative;padding:8px;";
     const iframe = document.createElement("iframe");
-    iframe.src = url;
-    iframe.allow = "autoplay; fullscreen";
-    iframe.style.cssText = `width:100%;height:${
-      this._config.height || DEFAULT_HEIGHT
-    }px;border:none;border-radius:4px;`;
+    iframe.src = frameUrl;
+    iframe.allow = "autoplay; fullscreen; microphone";
+    iframe.style.cssText = this._frameStyle();
     wrapper.appendChild(iframe);
+
+    const status = document.createElement("div");
+    status.style.cssText =
+      "position:absolute;left:16px;right:16px;bottom:16px;padding:10px;display:none;" +
+      "background:rgba(180,0,0,0.92);color:#fff;font-size:13px;border-radius:6px;z-index:2;";
+    wrapper.appendChild(status);
+
     card.appendChild(wrapper);
     this._iframe = iframe;
+    this._status = status;
     this.shadowRoot.replaceChildren(card);
   }
 
@@ -144,16 +383,22 @@ class CamstackGridCard extends HTMLElement {
     return document.createElement(EDITOR_TAG);
   }
 
-  static getStubConfig() {
-    return { entities: [], height: DEFAULT_HEIGHT };
+  static getStubConfig(hass) {
+    const entities = Object.keys((hass && hass.states) || {})
+      .filter((id) => id.startsWith("camera.") && deviceIdOf(hass, id) !== null)
+      .slice(0, 4);
+    return { entities, aspect_ratio: DEFAULT_ASPECT };
   }
 }
+
+// ── the editor ─────────────────────────────────────────────────────────────
 
 class CamstackGridCardEditor extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
     this._config = {};
+    this._hass = null;
   }
 
   setConfig(config) {
@@ -162,84 +407,217 @@ class CamstackGridCardEditor extends HTMLElement {
   }
 
   set hass(hass) {
+    const first = this._hass === null;
     this._hass = hass;
+    if (first) {
+      this._render();
+    }
+  }
+
+  /** Every CamStack camera entity, which is the only thing worth offering. */
+  _cameras() {
+    const states = (this._hass && this._hass.states) || {};
+    return Object.keys(states)
+      .filter((id) => id.startsWith("camera.") && deviceIdOf(this._hass, id) !== null)
+      .sort();
   }
 
   _render() {
     const config = this._config;
-    const field = (id, label, value, placeholder, type) => {
-      const row = document.createElement("div");
-      row.style.cssText = "margin-bottom:16px;";
-      const caption = document.createElement("label");
-      caption.textContent = label;
-      caption.setAttribute("for", id);
-      const input = document.createElement("input");
-      input.id = id;
-      input.type = type || "text";
-      input.value = value == null ? "" : String(value);
-      if (placeholder) {
-        input.placeholder = placeholder;
-      }
-      input.style.cssText =
-        "width:100%;padding:8px;margin-top:4px;box-sizing:border-box;";
-      input.addEventListener("input", () => this._emit());
-      row.append(caption, input);
-      return row;
-    };
-
     const wrapper = document.createElement("div");
-    wrapper.style.cssText = "padding:16px;";
+    wrapper.style.cssText = "padding:8px;display:flex;flex-direction:column;gap:14px;";
+
     wrapper.append(
-      field(
-        "entities",
-        "Cameras (entity ids, comma separated)",
-        (config.entities || []).join(", "),
-        "camera.front_door, camera.back_yard"
+      textField("title", "Title (optional)", config.title, ""),
+      cameraPicker("entities", "Cameras", config.entities || [], this._cameras(), (id) =>
+        friendlyName(this._hass, id)
       ),
-      field("grid_id", "Grid id (optional, overrides the cameras)", config.grid_id, "grid_xxx"),
-      field("height", "Height (px)", config.height || DEFAULT_HEIGHT, "", "number"),
-      field(
+      selectField("layout", "Columns", config.layout ?? "auto", [
+        ["auto", "Automatic"],
+        ["1", "1"],
+        ["2", "2"],
+        ["3", "3"],
+        ["4", "4"],
+        ["5", "5"],
+        ["6", "6"],
+      ]),
+      selectField("aspect_ratio", "Shape", config.aspect_ratio || DEFAULT_ASPECT, [
+        ["16:9", "16:9"],
+        ["4:3", "4:3"],
+        ["3:2", "3:2"],
+        ["1:1", "Square"],
+        ["none", "Fixed height (px)"],
+      ]),
+      numberField("height", "Height in px (used when shape is fixed)", config.height ?? DEFAULT_HEIGHT),
+      selectField("quality", "Stream quality", config.quality || "auto", [
+        ["auto", "Automatic"],
+        ["high", "High"],
+        ["mid", "Medium"],
+        ["low", "Low"],
+      ]),
+      checkboxField("show_names", "Show the camera name on each tile", config.show_names !== false),
+      checkboxField("show_boxes", "Show detection boxes", config.show_boxes === true),
+      checkboxField("active_only", "Only cameras that are currently active", config.active_only === true),
+      textField(
         "url_base",
         "Hub URL override (optional)",
         config.url_base,
         "Leave empty to use the configured CamStack integration"
       )
     );
+    wrapper.addEventListener("change", () => this._emit());
+    wrapper.addEventListener("input", () => this._emit());
     this.shadowRoot.replaceChildren(wrapper);
   }
 
-  _value(id) {
-    const el = this.shadowRoot.getElementById(id);
-    return el ? el.value.trim() : "";
-  }
-
   _emit() {
+    const root = this.shadowRoot;
     const config = { ...this._config };
-    const entities = this._value("entities")
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-    if (entities.length) {
-      config.entities = entities;
-    } else {
-      delete config.entities;
-    }
-    const gridId = this._value("grid_id");
-    if (gridId) {
-      config.grid_id = gridId;
-    } else {
-      delete config.grid_id;
-    }
-    const urlBase = this._value("url_base");
-    if (urlBase) {
-      config.url_base = urlBase;
-    } else {
-      delete config.url_base;
-    }
-    config.height = parseInt(this._value("height"), 10) || DEFAULT_HEIGHT;
+    setOrDelete(config, "title", readText(root, "title"));
+    config.entities = readChecked(root, "entities");
+    const layout = readText(root, "layout");
+    config.layout = layout === "auto" ? "auto" : parseInt(layout, 10);
+    config.aspect_ratio = readText(root, "aspect_ratio") || DEFAULT_ASPECT;
+    config.height = parseInt(readText(root, "height"), 10) || DEFAULT_HEIGHT;
+    config.quality = readText(root, "quality") || "auto";
+    config.show_names = readBool(root, "show_names");
+    setBoolOrDelete(config, "show_boxes", readBool(root, "show_boxes"));
+    setBoolOrDelete(config, "active_only", readBool(root, "active_only"));
+    setOrDelete(config, "url_base", readText(root, "url_base"));
     this.dispatchEvent(
-      new CustomEvent("config-changed", { detail: { config }, bubbles: true })
+      new CustomEvent("config-changed", { detail: { config }, bubbles: true, composed: true })
     );
+  }
+}
+
+// ── editor field helpers (shared shape with the events card editor) ─────────
+
+function labelled(id, label, control) {
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;flex-direction:column;gap:4px;";
+  const caption = document.createElement("label");
+  caption.setAttribute("for", id);
+  caption.textContent = label;
+  caption.style.cssText = "font-size:13px;color:var(--secondary-text-color);";
+  row.append(caption, control);
+  return row;
+}
+
+function textField(id, label, value, placeholder) {
+  const input = document.createElement("input");
+  input.id = id;
+  input.type = "text";
+  input.value = value == null ? "" : String(value);
+  if (placeholder) {
+    input.placeholder = placeholder;
+  }
+  input.style.cssText = "padding:8px;box-sizing:border-box;width:100%;";
+  return labelled(id, label, input);
+}
+
+function numberField(id, label, value) {
+  const input = document.createElement("input");
+  input.id = id;
+  input.type = "number";
+  input.value = value == null ? "" : String(value);
+  input.style.cssText = "padding:8px;box-sizing:border-box;width:100%;";
+  return labelled(id, label, input);
+}
+
+function selectField(id, label, value, options) {
+  const select = document.createElement("select");
+  select.id = id;
+  select.style.cssText = "padding:8px;box-sizing:border-box;width:100%;";
+  for (const [optionValue, optionLabel] of options) {
+    const option = document.createElement("option");
+    option.value = optionValue;
+    option.textContent = optionLabel;
+    option.selected = String(value) === optionValue;
+    select.appendChild(option);
+  }
+  return labelled(id, label, select);
+}
+
+function checkboxField(id, label, checked) {
+  const row = document.createElement("label");
+  row.style.cssText = "display:flex;align-items:center;gap:8px;font-size:14px;";
+  const input = document.createElement("input");
+  input.id = id;
+  input.type = "checkbox";
+  input.checked = !!checked;
+  const caption = document.createElement("span");
+  caption.textContent = label;
+  row.append(input, caption);
+  return row;
+}
+
+/**
+ * A checkbox per camera rather than a free-text list of entity ids.
+ *
+ * The previous editor asked the operator to type comma-separated entity ids,
+ * which is exactly the field where a typo produces an empty grid and no error.
+ */
+function cameraPicker(id, label, selected, entityIds, nameOf) {
+  const box = document.createElement("div");
+  box.dataset.picker = id;
+  box.style.cssText =
+    "display:flex;flex-direction:column;gap:4px;max-height:240px;overflow:auto;" +
+    "border:1px solid var(--divider-color,#444);border-radius:6px;padding:8px;";
+  if (!entityIds.length) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "color:var(--secondary-text-color);font-size:13px;";
+    empty.textContent =
+      "No CamStack camera entities found. Export the cameras to Home Assistant on the hub first.";
+    box.appendChild(empty);
+  }
+  for (const entityId of entityIds) {
+    const row = document.createElement("label");
+    row.style.cssText = "display:flex;align-items:center;gap:8px;font-size:14px;";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = entityId;
+    input.checked = selected.includes(entityId);
+    const caption = document.createElement("span");
+    caption.textContent = nameOf(entityId);
+    row.append(input, caption);
+    box.appendChild(row);
+  }
+  return labelled(id, label, box);
+}
+
+function readText(root, id) {
+  const el = root.getElementById(id);
+  return el ? String(el.value).trim() : "";
+}
+
+function readBool(root, id) {
+  const el = root.getElementById(id);
+  return el ? !!el.checked : false;
+}
+
+function readChecked(root, pickerId) {
+  const box = root.querySelector(`[data-picker="${pickerId}"]`);
+  if (!box) {
+    return [];
+  }
+  return Array.from(box.querySelectorAll("input[type=checkbox]"))
+    .filter((input) => input.checked)
+    .map((input) => input.value);
+}
+
+function setOrDelete(config, key, value) {
+  if (value) {
+    config[key] = value;
+  } else {
+    delete config[key];
+  }
+}
+
+function setBoolOrDelete(config, key, value) {
+  if (value) {
+    config[key] = true;
+  } else {
+    delete config[key];
   }
 }
 
@@ -256,6 +634,7 @@ if (!window.customCards.some((card) => card.type === `custom:${CARD_TAG}`)) {
     type: `custom:${CARD_TAG}`,
     name: "CamStack Grid",
     preview: true,
-    description: "A CamStack camera grid, pointed at the configured hub",
+    description: "A live CamStack camera wall, pointed at the configured hub",
+    documentationURL: "https://github.com/camstack/homeassistant-component",
   });
 }

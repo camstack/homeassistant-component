@@ -42,6 +42,7 @@ from .coordinator import (
     CamStackCoordinator,
     CamStackRuntimeData,
 )
+from .embed_token import async_forget_entry_tokens
 from .frontend import async_remove_panel, async_setup_frontend
 from .migration import async_migrate_entry, entry_has_credentials, entry_is_oauth
 from .oauth import CamStackOAuth2Implementation, OAuth2Auth
@@ -145,6 +146,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: CamStackConfigEntry) ->
     """Unload a config entry."""
     async_remove_panel(hass, entry.entry_id)
     async_unregister_push_hub(hass, entry.entry_id)
+    # The cached share tokens are minted against THIS entry's hub credential.
+    # Keeping them past an unload would hand a reloaded entry — possibly now
+    # pointing at a different hub — a credential for the old one.
+    async_forget_entry_tokens(hass, entry.entry_id)
     runtime = getattr(entry, "runtime_data", None)
     if isinstance(runtime, CamStackRuntimeData):
         runtime.push.async_stop()

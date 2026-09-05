@@ -20,7 +20,7 @@ from custom_components.camstack.const import (
     CONFIG_VIEW_URL,
     PANEL_URL_PATH,
 )
-from custom_components.camstack.frontend import CARD_MODULE_URL, PANEL_MODULE_URL
+from custom_components.camstack.frontend import CARD_MODULE_URLS, PANEL_MODULE_URL
 
 from .test_entities import setup_integration
 
@@ -144,7 +144,8 @@ async def test_the_panel_and_the_card_are_served_by_the_integration(
 
     for url, marker in (
         (PANEL_MODULE_URL, "camstack-panel"),
-        (CARD_MODULE_URL, "camstack-grid-card"),
+        (CARD_MODULE_URLS[0], "camstack-grid-card"),
+        (CARD_MODULE_URLS[1], "camstack-events-card"),
     ):
         response = await client.get(url)
         assert response.status == 200
@@ -168,6 +169,9 @@ async def test_the_card_endpoint_reports_the_hub_so_the_card_need_not_ask(
             "entry_id": config_entry.entry_id,
             "title": "CamStack (192.168.1.9)",
             "url_base": "https://192.168.1.9:4443",
+            # The cards need the HUB's numeric ids, and a camera with no Home
+            # Assistant entity would otherwise be unnameable on a dashboard.
+            "cameras": [{"id": 615, "name": "Videocamera ingresso"}],
         }
     ]
 

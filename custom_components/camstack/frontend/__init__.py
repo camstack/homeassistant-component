@@ -1,9 +1,9 @@
-"""The CamStack sidebar panel and Lovelace card.
+"""The CamStack sidebar panel and the Lovelace cards.
 
-Both are served by the integration itself, from the files next to this module.
-Neither asks for an address: the panel and the card resolve the hub from the
-config entry that already holds `host` and `port`. Asking a second time is how
-the two surfaces end up pointing at different hubs, and nothing about that
+All of them are served by the integration itself, from the files next to this
+module. None asks for an address: the panel and the cards resolve the hub from
+the config entry that already holds `host` and `port`. Asking a second time is
+how the surfaces end up pointing at different hubs, and nothing about that
 looks broken until a camera is missing from one of them.
 """
 
@@ -23,7 +23,7 @@ from homeassistant.helpers.start import async_at_started
 from homeassistant.loader import async_get_integration
 
 from ..const import (
-    CARD_FILENAME,
+    CARD_FILENAMES,
     CONF_PANEL_ENABLED,
     CONF_PANEL_ICON,
     CONF_PANEL_TITLE,
@@ -38,6 +38,7 @@ from ..const import (
     PANEL_URL_PATH,
     STATIC_URL_PATH,
 )
+from ..embed_token import async_register_embed_token_view
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,7 +50,10 @@ _VIEW_REGISTERED = f"{DOMAIN}_view_registered"
 LOVELACE_DATA_KEY = "lovelace"
 
 PANEL_MODULE_URL = f"{STATIC_URL_PATH}/{PANEL_FILENAME}"
-CARD_MODULE_URL = f"{STATIC_URL_PATH}/{CARD_FILENAME}"
+CARD_MODULE_URLS = tuple(f"{STATIC_URL_PATH}/{name}" for name in CARD_FILENAMES)
+# The grid card, kept named because it is the one this component shipped first
+# and every existing Lovelace resource points at it.
+CARD_MODULE_URL = CARD_MODULE_URLS[0]
 
 
 def async_resolve_base_url(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
@@ -78,10 +82,11 @@ def async_resolve_base_url(hass: HomeAssistant, entry: ConfigEntry) -> str | Non
 
 
 async def async_setup_frontend(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Serve the assets, register the panel, and offer the card to Lovelace."""
+    """Serve the assets, register the panel, and offer the cards to Lovelace."""
     await _async_register_static_assets(hass)
     _async_register_config_view(hass)
-    await _async_register_card_resource(hass, entry)
+    async_register_embed_token_view(hass)
+    await _async_register_card_resources(hass, entry)
     await _async_register_panel(hass, entry)
 
 
@@ -157,10 +162,10 @@ def async_remove_panel(hass: HomeAssistant, entry_id: str | None = None) -> None
     frontend.async_remove_panel(hass, PANEL_URL_PATH, warn_if_unknown=False)
 
 
-async def _async_register_card_resource(
+async def _async_register_card_resources(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
-    """Add the grid card to Lovelace's resources when Lovelace stores them.
+    """Add every card to Lovelace's resources when Lovelace stores them.
 
     Deferred to "Home Assistant has started" rather than retried on a timer.
     A timer that polls for a component that may never be installed is a loop
@@ -168,16 +173,20 @@ async def _async_register_card_resource(
 
     In YAML mode the resource list is the operator's file and this component
     does not own it, so it is left alone and documented instead.
+
+    Driven by `CARD_FILENAMES`, so shipping a card and registering it cannot
+    drift: a card added to the directory and forgotten here would simply never
+    appear in the dashboard picker, with nothing logged.
     """
     integration = await async_get_integration(hass, DOMAIN)
     version = str(integration.version or "0")
-    url = f"{CARD_MODULE_URL}?v={version}"
+    wanted = {name: f"{STATIC_URL_PATH}/{name}?v={version}" for name in CARD_FILENAMES}
 
     async def _add(_: Any = None) -> None:
         lovelace = hass.data.get(LOVELACE_DATA_KEY)
         resources = getattr(lovelace, "resources", None)
         if resources is None:
-            _LOGGER.debug("Lovelace is not loaded; the grid card was not registered")
+            _LOGGER.debug("Lovelace is not loaded; the cards were not registered")
             return
         mode = getattr(lovelace, "resource_mode", getattr(lovelace, "mode", "yaml"))
         if mode != "storage":
@@ -186,18 +195,27 @@ async def _async_register_card_resource(
         # Loads the collection from storage as a side effect. Reading
         # `async_items()` first would see an empty list and create a duplicate.
         await resources.async_get_info()
-        for item in resources.async_items():
-            if CARD_FILENAME not in str(item.get("url") or ""):
-                continue
-            if item.get("url") != url:
-                # A stale version query pins every browser to the card that
-                # shipped with the previous release.
-                await resources.async_update_item(item["id"], {"url": url})
-            return
-        await resources.async_create_item({"res_type": "module", "url": url})
-        _LOGGER.debug("Registered the CamStack grid card as a Lovelace resource")
+        existing = list(resources.async_items())
+        for filename, url in wanted.items():
+            await _async_reconcile_resource(resources, existing, filename, url)
 
     entry.async_on_unload(async_at_started(hass, _add))
+
+
+async def _async_reconcile_resource(
+    resources: Any, existing: list[dict[str, Any]], filename: str, url: str
+) -> None:
+    """Create or re-point the single resource entry for one card file."""
+    for item in existing:
+        if filename not in str(item.get("url") or ""):
+            continue
+        if item.get("url") != url:
+            # A stale version query pins every browser to the card that
+            # shipped with the previous release.
+            await resources.async_update_item(item["id"], {"url": url})
+        return
+    await resources.async_create_item({"res_type": "module", "url": url})
+    _LOGGER.debug("Registered %s as a Lovelace resource", filename)
 
 
 class CamStackConfigView(HomeAssistantView):
@@ -213,7 +231,13 @@ class CamStackConfigView(HomeAssistantView):
     requires_auth = True
 
     async def get(self, request: web.Request) -> web.Response:
-        """Return one record per configured hub."""
+        """Return one record per configured hub, with the cameras it exports.
+
+        The camera list is here rather than derived in the browser because a
+        card needs the HUB's numeric device ids, and a dashboard that has no
+        camera entity for a device — a camera the operator never added — would
+        otherwise have no way to name it.
+        """
         hass: HomeAssistant = request.app[KEY_HASS]
         entries = []
         for entry in hass.config_entries.async_entries(DOMAIN):
@@ -221,6 +245,29 @@ class CamStackConfigView(HomeAssistantView):
             if url is None:
                 continue
             entries.append(
-                {"entry_id": entry.entry_id, "title": entry.title, "url_base": url}
+                {
+                    "entry_id": entry.entry_id,
+                    "title": entry.title,
+                    "url_base": url,
+                    "cameras": _exported_cameras(entry),
+                }
             )
         return self.json({"entries": entries})
+
+
+def _exported_cameras(entry: ConfigEntry) -> list[dict[str, Any]]:
+    """Return `{id, name}` per exported camera, or an empty list.
+
+    Empty when the entry is not loaded yet. That is honest — unknown, not
+    "this hub has no cameras" — and the cards say "waiting" rather than
+    "none" while it is.
+    """
+    coordinator = getattr(getattr(entry, "runtime_data", None), "coordinator", None)
+    data = getattr(coordinator, "data", None)
+    if data is None:
+        return []
+    return [
+        {"id": device.device_id, "name": device.name}
+        for device in data.cameras()
+        if not device.disabled
+    ]
