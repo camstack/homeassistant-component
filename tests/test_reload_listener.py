@@ -12,29 +12,30 @@ messages and re-announced everything. Twenty occurrences in the system log.
 
 from __future__ import annotations
 
-
+from unittest.mock import AsyncMock
 
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from .conftest import setup_integration
 
+RENEWED_TOKEN = {"access_token": "renewed", "expires_at": 1.0}
+
 
 async def test_a_token_refresh_does_not_reload_the_entry(
-    hass: HomeAssistant, config_entry: MockConfigEntry
+    hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
 ) -> None:
     """Rewriting ``entry.data`` with a new token keeps the running setup."""
     runtime = await setup_integration(hass, config_entry)
     hass.config_entries.async_update_entry(
-        config_entry,
-        data={**config_entry.data, "token": {"access_token": "renewed", "expires_at": 1.0}},
+        config_entry, data={**config_entry.data, "token": RENEWED_TOKEN}
     )
     await hass.async_block_till_done()
     assert config_entry.runtime_data is runtime
 
 
 async def test_an_options_change_still_reloads_the_entry(
-    hass: HomeAssistant, config_entry: MockConfigEntry
+    hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
 ) -> None:
     """The reason the listener exists: the panel is rebuilt from options."""
     runtime = await setup_integration(hass, config_entry)
