@@ -465,3 +465,21 @@ async def test_a_transport_verb_presses_its_own_entity(
         COMMAND_ROUTE_PATH,
         {"topic": topic(MEDIA_CHANGE, "media_player_next") + "/set", "value": "PRESS"},
     )
+
+
+async def test_the_hubs_standby_lands_on_a_state_home_assistant_still_has(
+    hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
+) -> None:
+    """`MediaPlayerState.STANDBY` is removed in HA Core 2026.8.0.
+
+    The hub keeps sending `standby`; using the deprecated member logged a
+    warning on every start and would raise once the member goes. OFF is Home
+    Assistant's own suggestion for a player that is powered down and reachable.
+    """
+    await setup_integration(hass, config_entry)
+    await announce(hass, config_entry, MEDIA_CHANGE)
+    await push(
+        hass, config_entry, state_update(topic(MEDIA_CHANGE, "media_player"), "standby")
+    )
+
+    assert hass.states.get(MEDIA).state == "off"

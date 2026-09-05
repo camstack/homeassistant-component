@@ -23,7 +23,13 @@ from .entity import CamStackPushEntity, as_bool, as_float
 
 # `MediaPlayerStateSchema` on the hub → what Home Assistant has. Every one
 # of the seven maps; `on` is the player awake with nothing loaded, which is
-# HA's IDLE, and `standby` is its own state.
+# HA's IDLE.
+#
+# `standby` maps to OFF, not to a state of its own: `MediaPlayerState.STANDBY`
+# is deprecated and is removed in HA Core 2026.8.0, which logged
+#   "The deprecated enum member MediaPlayerState.STANDBY was used from camstack"
+# on every start. Home Assistant's own guidance is OFF or IDLE, and a player in
+# standby is powered down while still reachable — which is what OFF means here.
 _STATES: dict[str, MediaPlayerState] = {
     "off": MediaPlayerState.OFF,
     "on": MediaPlayerState.IDLE,
@@ -31,7 +37,7 @@ _STATES: dict[str, MediaPlayerState] = {
     "playing": MediaPlayerState.PLAYING,
     "paused": MediaPlayerState.PAUSED,
     "buffering": MediaPlayerState.BUFFERING,
-    "standby": MediaPlayerState.STANDBY,
+    "standby": MediaPlayerState.OFF,
 }
 
 _REPEAT_MODES: frozenset[str] = frozenset(mode.value for mode in RepeatMode)
