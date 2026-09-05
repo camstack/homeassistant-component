@@ -64,6 +64,10 @@ class CamStackRuntimeData:
     client: CamStackClient
     push: CamStackPushHub
     coordinator: CamStackCoordinator
+    # The options this setup was built from. The update listener reloads only
+    # when they change — never on the hourly token refresh that rewrites
+    # ``entry.data`` (see ``_async_entry_updated``).
+    options_loaded: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

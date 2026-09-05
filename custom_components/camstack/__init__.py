@@ -112,7 +112,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: CamStackConfigEntry) -> 
     coordinator = CamStackCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = CamStackRuntimeData(
-        client=client, push=push, coordinator=coordinator
+        client=client,
+        push=push,
+        coordinator=coordinator,
+        options_loaded=dict(entry.options),
     )
 
     # A device the hub stopped exporting has no way of saying so — the push
@@ -241,5 +244,20 @@ def _build_auth(
 
 
 async def _async_entry_updated(hass: HomeAssistant, entry: CamStackConfigEntry) -> None:
-    """Reload after an options change so the panel is rebuilt from them."""
+    """Reload after an OPTIONS change so the panel is rebuilt from them.
+
+    ``add_update_listener`` fires on EVERY entry update, and Home Assistant
+    refreshes the OAuth access token by rewriting ``entry.data`` once an hour.
+    Reloading on that rewrite tore the running setup down every hour to the
+    second (HH:10:36 on the live hub, 2026-09-05): the old coordinator's
+    in-flight query died with ``RuntimeError: Session is closed``, the fresh
+    setup armed ``resync_pending``, and the hub's next push was answered
+    ``503 resync`` — 18-20 messages dropped and a full re-announce, hourly.
+    Only a change in ``options`` is a reason to rebuild. A reconfigure of
+    ``data`` (host, port, credentials) reloads through the config flow's own
+    ``async_update_reload_and_abort`` and never needs this listener.
+    """
+    runtime = getattr(entry, "runtime_data", None)
+    if runtime is not None and runtime.options_loaded == dict(entry.options):
+        return
     await hass.config_entries.async_reload(entry.entry_id)
