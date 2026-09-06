@@ -33,7 +33,6 @@ from custom_components.camstack.proxy import (
     is_relayed_path,
 )
 
-
 EXPORTED = 615
 
 
