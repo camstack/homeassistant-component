@@ -23,7 +23,7 @@ EXPORTED = 615
 
 
 def minted(expires_at_ms: int | None = 4_000_000_000_000) -> dict[str, object]:
-    """A hub `auth.createShareToken` answer."""
+    """Return a hub `auth.createShareToken` answer."""
     return {"id": "tok1", "token": "csv_deadbeef", "expiresAt": expires_at_ms}
 
 
