@@ -629,9 +629,9 @@ if (!customElements.get(CARD_TAG)) {
 }
 
 window.customCards = window.customCards || [];
-if (!window.customCards.some((card) => card.type === `custom:${CARD_TAG}`)) {
+if (!window.customCards.some((card) => card.type === CARD_TAG)) {
   window.customCards.push({
-    type: `custom:${CARD_TAG}`,
+    type: CARD_TAG,
     name: "CamStack Grid",
     preview: true,
     description: "A live CamStack camera wall, pointed at the configured hub",
