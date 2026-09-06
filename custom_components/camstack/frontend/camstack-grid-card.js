@@ -27,6 +27,18 @@
  * only when the composed URL changes; a changed device list or layout is sent
  * over the open channel instead.
  */
+/**
+ * The probe lives in a sibling module. `import.meta.url` carries the `?v=`
+ * Lovelace loads this card with, and the sibling is asked for with the same
+ * query, so a release never pairs a new card with a cached old probe.
+ */
+const VERSION_QUERY = new URL(import.meta.url).search;
+const { probeHub, buildUnreachableNotice } = await import(
+  `./camstack-hub-probe.js${VERSION_QUERY}`
+);
+/** The embed posts `embed-ready` within this, or the card says the player did not start. */
+const EMBED_READY_TIMEOUT_MS = 12000;
+
 const CARD_TAG = "camstack-grid-card";
 const EDITOR_TAG = "camstack-grid-card-editor";
 const EMBED_PATH = "/viewer/camstack/embed/index.html";
@@ -114,6 +126,9 @@ class CamstackGridCard extends HTMLElement {
     this._tokenKey = null;
     this._pendingToken = null;
     this._sentConfigKey = null;
+    this._probeToken = 0;
+    this._readyTimer = null;
+    this._embedReady = false;
     this._onMessage = this._onMessage.bind(this);
   }
 
@@ -123,6 +138,50 @@ class CamstackGridCard extends HTMLElement {
 
   disconnectedCallback() {
     window.removeEventListener("message", this._onMessage);
+    this._clearReadyTimer();
+    // Invalidates a probe still in flight, so a late answer cannot paint over
+    // a card that has since been re-pointed or torn down.
+    this._probeToken += 1;
+  }
+
+  _clearReadyTimer() {
+    if (this._readyTimer !== null) {
+      clearTimeout(this._readyTimer);
+      this._readyTimer = null;
+    }
+  }
+
+  /**
+   * Ask the browser — not the iframe — whether it will show the hub, and
+   * replace a refused frame with the reason. Also bounds the wait for the
+   * embed's `embed-ready`: a hub that is reachable but whose player never
+   * comes up is reported instead of sitting blank.
+   */
+  _watchFrame(frameUrl, iframe) {
+    const token = ++this._probeToken;
+    const origin = new URL(frameUrl).origin;
+    this._embedReady = false;
+    probeHub(origin).then((result) => {
+      if (token !== this._probeToken || result !== "unreachable") {
+        return;
+      }
+      this._clearReadyTimer();
+      iframe.replaceWith(buildUnreachableNotice(origin));
+      this._iframe = null;
+      this._setStatus(null);
+    });
+    this._clearReadyTimer();
+    this._readyTimer = setTimeout(() => {
+      this._readyTimer = null;
+      if (token !== this._probeToken || this._iframe !== iframe) {
+        return;
+      }
+      if (!this._embedReady) {
+        this._setStatus(
+          "The hub is reachable, but its player did not answer. Open the hub in a new tab to see why."
+        );
+      }
+    }, EMBED_READY_TIMEOUT_MS);
   }
 
   setConfig(config) {
@@ -222,6 +281,8 @@ class CamstackGridCard extends HTMLElement {
       return;
     }
     if (data.type === "embed-ready" && data.mode === "grid") {
+      this._embedReady = true;
+      this._clearReadyTimer();
       this._sentConfigKey = null;
       this._sendConfig();
       return;
@@ -377,6 +438,7 @@ class CamstackGridCard extends HTMLElement {
     this._iframe = iframe;
     this._status = status;
     this.shadowRoot.replaceChildren(card);
+    this._watchFrame(frameUrl, iframe);
   }
 
   static getConfigElement() {

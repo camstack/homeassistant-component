@@ -288,6 +288,15 @@ CamStack apps do.
 Both have a UI editor: add them from the dashboard's card picker ("CamStack
 Grid", "CamStack Events") and pick cameras with checkboxes.
 
+**A blank card means the browser refused the hub's certificate.** The hub
+serves HTTPS signed by its own local authority, and a browser that does not
+trust it blocks the frame silently — no error, no interstitial. The cards
+probe the hub and say so in the card, with a link: open the hub once in a new
+tab and accept the certificate, or install the CA certificate from the
+admin UI (Settings → Network) in the device's trust store. The Home Assistant
+apps offer no exception to click through, so on a phone the CA install is the
+way.
+
 ### `camstack-grid-card` — a live wall
 
 ```yaml

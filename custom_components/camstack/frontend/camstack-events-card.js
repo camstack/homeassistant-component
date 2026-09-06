@@ -33,6 +33,15 @@
  * cuts the time off the bottom of every card, so the card computes the height
  * rather than offering it as a free number.
  */
+/**
+ * The probe lives in a sibling module. `import.meta.url` carries the `?v=`
+ * Lovelace loads this card with, and the sibling is asked for with the same
+ * query, so a release never pairs a new card with a cached old probe.
+ */
+const VERSION_QUERY = new URL(import.meta.url).search;
+const { probeHub, buildUnreachableNotice } = await import(
+  `./camstack-hub-probe.js${VERSION_QUERY}`
+);
 const CARD_TAG = "camstack-events-card";
 const EDITOR_TAG = "camstack-events-card-editor";
 const EMBED_PATH = "/viewer/camstack/embed/index.html";
@@ -76,6 +85,7 @@ class CamstackEventsCard extends HTMLElement {
     this._hass = null;
     this._resolvedBase = null;
     this._entryId = null;
+    this._probeToken = 0;
     this._cameras = [];
     this._resolving = false;
     this._renderedUrl = null;
@@ -100,6 +110,29 @@ class CamstackEventsCard extends HTMLElement {
       this._resolveBase();
     }
     this._render();
+  }
+
+  disconnectedCallback() {
+    // Invalidates a probe still in flight, so a late answer cannot paint over
+    // a card that has since been re-pointed or torn down.
+    this._probeToken += 1;
+  }
+
+  /**
+   * Ask the browser — not the iframe — whether it will show the hub, and
+   * replace a refused frame with the reason instead of a white rectangle.
+   */
+  _watchFrame(url, iframe) {
+    const token = ++this._probeToken;
+    const origin = new URL(url).origin;
+    probeHub(origin).then((result) => {
+      if (token !== this._probeToken || result !== "unreachable") {
+        return;
+      }
+      iframe.replaceWith(buildUnreachableNotice(origin));
+      this._iframe = null;
+      this._setStatus(null);
+    });
   }
 
   getCardSize() {
@@ -364,6 +397,7 @@ class CamstackEventsCard extends HTMLElement {
       iframe.style.cssText = this._frameStyle();
       wrapper.appendChild(iframe);
       this._iframe = iframe;
+      this._watchFrame(url, iframe);
     } else {
       const empty = document.createElement("div");
       empty.style.cssText = "padding:16px;color:var(--secondary-text-color);";

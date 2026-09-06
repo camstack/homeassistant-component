@@ -186,11 +186,11 @@ async def _async_register_card_resources(
         lovelace = hass.data.get(LOVELACE_DATA_KEY)
         resources = getattr(lovelace, "resources", None)
         if resources is None:
-            _LOGGER.debug("Lovelace is not loaded; the cards were not registered")
+            _LOGGER.info("Lovelace is not loaded; the cards were not registered")
             return
         mode = getattr(lovelace, "resource_mode", getattr(lovelace, "mode", "yaml"))
         if mode != "storage":
-            _LOGGER.debug("Lovelace is in YAML mode; not touching its resources")
+            _LOGGER.info("Lovelace is in YAML mode; not touching its resources")
             return
         # Loads the collection from storage as a side effect. Reading
         # `async_items()` first would see an empty list and create a duplicate.
@@ -213,9 +213,10 @@ async def _async_reconcile_resource(
             # A stale version query pins every browser to the card that
             # shipped with the previous release.
             await resources.async_update_item(item["id"], {"url": url})
+            _LOGGER.info("Re-pointed the %s resource to %s", filename, url)
         return
     await resources.async_create_item({"res_type": "module", "url": url})
-    _LOGGER.debug("Registered %s as a Lovelace resource", filename)
+    _LOGGER.info("Registered %s as a Lovelace resource at %s", filename, url)
 
 
 class CamStackConfigView(HomeAssistantView):
