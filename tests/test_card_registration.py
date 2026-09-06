@@ -111,3 +111,29 @@ def test_the_panel_frames_the_relay_when_its_config_names_one() -> None:
     source = (ASSET_DIR / "camstack-panel.js").read_text(encoding="utf-8")
     assert "config.proxy_base" in source
     assert "_renderRelayedFrame(`${window.location.origin}${proxyBase}/`)" in source
+
+
+@pytest.mark.parametrize("filename", CARD_FILENAMES)
+def test_a_card_keeps_asking_which_hub_instead_of_declaring_none(filename: str) -> None:
+    """A Home Assistant restart must not park a card on "no hub configured".
+
+    The address lookup ran ONCE, on the first `hass`. During a restart the
+    entry is not loaded yet, the call throws, and the card said the hub was
+    absent — for the rest of the page's life (operator screenshot,
+    2026-09-06). Absence may only be claimed by an answer that named no
+    entry; a failure is a wait, retried on the relay's ladder.
+    """
+    source = (ASSET_DIR / filename).read_text(encoding="utf-8")
+    assert "this._baseState = 'pending'" in source, f"{filename}: no tri-state"
+    assert "this._baseState = entry ? 'known' : 'absent'" in source, (
+        f"{filename}: absence is not read off an answer"
+    )
+    assert "_scheduleBaseRetry()" in source, (
+        f"{filename}: a failed lookup is never retried"
+    )
+    assert "this._baseState !== 'absent'" in source, (
+        f"{filename}: the empty state still races the in-flight flag"
+    )
+    assert "_clearBaseTimer()" in source, (
+        f"{filename}: the retry timer outlives the card"
+    )

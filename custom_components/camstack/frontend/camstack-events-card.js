@@ -137,6 +137,11 @@ class CamstackEventsCard extends HTMLElement {
     this._config = {};
     this._hass = null;
     this._resolvedBase = null;
+    // 'pending' until the integration answers; 'absent' ONLY when it
+    // answered and named no entry. Absence is never inferred from a failure.
+    this._baseState = 'pending';
+    this._baseTimer = null;
+    this._baseAttempt = 0;
     this._entryId = null;
     this._proxyBase = null;
     this._probeToken = 0;
@@ -177,6 +182,7 @@ class CamstackEventsCard extends HTMLElement {
     // a card that has since been re-pointed or torn down.
     this._probeToken += 1;
     this._clearRetryTimer();
+    this._clearBaseTimer();
   }
 
   /**
@@ -263,6 +269,15 @@ class CamstackEventsCard extends HTMLElement {
     return Math.ceil(this._frameHeight() / 50);
   }
 
+  /**
+   * Ask the integration which hub to point at — and keep asking.
+   *
+   * Called once per card before 2026-09-06, which made a Home Assistant
+   * RESTART fatal to an open dashboard: the entry is not loaded when the
+   * first `hass` arrives, this throws, and the card parks on "No CamStack hub
+   * configured" until someone reloads the browser. A failure is a WAIT now —
+   * not-yet-known must never look like not-installed.
+   */
   async _resolveBase() {
     if (this._resolving) {
       return;
@@ -277,13 +292,38 @@ class CamstackEventsCard extends HTMLElement {
       this._resolvedBase = entry ? entry.url_base : null;
       this._entryId = entry ? entry.entry_id : null;
       this._cameras = (entry && entry.cameras) || [];
+      // The endpoint ANSWERED: absence is a fact now, not a guess.
+      this._baseState = entry ? 'known' : 'absent';
+      this._baseAttempt = 0;
     } catch {
+      // Not an answer — Home Assistant may still be starting. Keep waiting and
+      // ask again; never turn a failed read into "no hub configured".
       this._resolvedBase = null;
       this._cameras = [];
+      this._baseState = 'pending';
+      this._scheduleBaseRetry();
     } finally {
       this._resolving = false;
       this._render();
       this._refresh();
+    }
+  }
+
+  _scheduleBaseRetry() {
+    if (this._baseTimer !== null) {
+      return;
+    }
+    const delay = RELAY_RETRY_MS[Math.min(this._baseAttempt++, RELAY_RETRY_MS.length - 1)];
+    this._baseTimer = setTimeout(() => {
+      this._baseTimer = null;
+      this._resolveBase();
+    }, delay);
+  }
+
+  _clearBaseTimer() {
+    if (this._baseTimer !== null) {
+      clearTimeout(this._baseTimer);
+      this._baseTimer = null;
     }
   }
 
@@ -567,7 +607,7 @@ class CamstackEventsCard extends HTMLElement {
     } else {
       const empty = document.createElement("div");
       empty.style.cssText = "padding:16px;color:var(--secondary-text-color);";
-      empty.textContent = this._resolving
+      empty.textContent = this._baseState !== 'absent'
         ? "Waiting for the CamStack integration…"
         : "No CamStack hub configured. Add the CamStack integration, or set url_base on this card.";
       wrapper.appendChild(empty);

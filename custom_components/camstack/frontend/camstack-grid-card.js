@@ -178,6 +178,11 @@ class CamstackGridCard extends HTMLElement {
     this._config = {};
     this._hass = null;
     this._resolvedBase = null;
+    // 'pending' until the integration answers; 'absent' ONLY when it
+    // answered and named no entry. Absence is never inferred from a failure.
+    this._baseState = 'pending';
+    this._baseTimer = null;
+    this._baseAttempt = 0;
     this._entryId = null;
     this._resolving = false;
     this._renderedKey = null;
@@ -209,6 +214,7 @@ class CamstackGridCard extends HTMLElement {
     window.removeEventListener("message", this._onMessage);
     this._clearReadyTimer();
     this._clearRetryTimer();
+    this._clearBaseTimer();
     // Invalidates a probe still in flight, so a late answer cannot paint over
     // a card that has since been re-pointed or torn down.
     this._probeToken += 1;
@@ -348,6 +354,17 @@ class CamstackGridCard extends HTMLElement {
 
   // ── hub address ──────────────────────────────────────────────────────────
 
+  /**
+   * Ask the integration which hub to point at — and keep asking.
+   *
+   * Called once per card before 2026-09-06, which made a Home Assistant
+   * RESTART fatal to an open dashboard: the entry is not loaded when the
+   * first `hass` arrives, this throws, `_resolvedBase` stays null, and the
+   * card parks on "No CamStack hub configured" until someone reloads the
+   * browser. Now a failure is a WAIT, retried on the relay's ladder, and only
+   * an answer that named no entry may say the hub is absent — not-yet-known
+   * must never look like not-installed.
+   */
   async _resolveBase() {
     if (this._resolving) {
       return;
@@ -361,13 +378,36 @@ class CamstackGridCard extends HTMLElement {
         entries.find((item) => !wanted || item.entry_id === wanted) || null;
       this._resolvedBase = entry ? entry.url_base : null;
       this._entryId = entry ? entry.entry_id : null;
+      // The endpoint ANSWERED: absence is a fact now, not a guess.
+      this._baseState = entry ? 'known' : 'absent';
+      this._baseAttempt = 0;
     } catch {
-      // The integration is not loaded, or this user may not call it. The card
-      // falls back to its own `url_base`, and says so when it has none.
+      // Not an answer — Home Assistant may still be starting. Keep waiting and
+      // ask again; never turn a failed read into "no hub configured".
       this._resolvedBase = null;
+      this._baseState = 'pending';
+      this._scheduleBaseRetry();
     } finally {
       this._resolving = false;
       this._render();
+    }
+  }
+
+  _scheduleBaseRetry() {
+    if (this._baseTimer !== null) {
+      return;
+    }
+    const delay = RELAY_RETRY_MS[Math.min(this._baseAttempt++, RELAY_RETRY_MS.length - 1)];
+    this._baseTimer = setTimeout(() => {
+      this._baseTimer = null;
+      this._resolveBase();
+    }, delay);
+  }
+
+  _clearBaseTimer() {
+    if (this._baseTimer !== null) {
+      clearTimeout(this._baseTimer);
+      this._baseTimer = null;
     }
   }
 
@@ -578,7 +618,7 @@ class CamstackGridCard extends HTMLElement {
     if (!this._baseUrl() || !this._hass) {
       this._mountFrame(
         null,
-        this._resolving
+        this._baseState !== 'absent'
           ? "Waiting for the CamStack integration…"
           : "No CamStack hub configured. Add the CamStack integration, or set url_base on this card."
       );
