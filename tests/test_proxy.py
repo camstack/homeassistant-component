@@ -75,6 +75,7 @@ class FakeHub:
                 "query": dict(request.query),
                 "authorization": request.headers.get("Authorization"),
                 "prefix": request.headers.get("X-Forwarded-Prefix"),
+                "accept_encoding": request.headers.get("Accept-Encoding"),
                 "cookie": request.headers.get("Cookie"),
                 "method": request.method,
             }
@@ -166,6 +167,7 @@ async def test_the_relay_forwards_the_embed_page_with_the_grant_token_and_no_ha_
             "query": {"mode": "grid"},
             "authorization": "Bearer csv_x",
             "prefix": f"{PROXY_VIEW_URL}/{grant}",
+            "accept_encoding": "gzip, deflate",
             "cookie": None,
             "method": "GET",
         }
@@ -389,3 +391,29 @@ async def test_the_relay_injects_the_token_the_browser_never_received(
         await ws.send_str("hello")
         msg = await ws.receive(timeout=5)
     assert msg.data == "echo:hello:Bearer csv_deadbeef"
+
+
+async def test_the_relay_never_asks_the_hub_for_an_encoding_it_cannot_decode(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hub: FakeHub,
+    hass_client_no_auth: ClientSessionGenerator,
+) -> None:
+    """A browser asks for zstd; Home Assistant's aiohttp cannot decode it.
+
+    Forwarded verbatim, the hub answered in zstd and every relayed request
+    failed with "Can not decode content-encoding: zstandard (zstd)" — a 502
+    painted into the operator's dashboard while the hub was healthy.
+    """
+    await _setup(hass, config_entry)
+    grant = _grant_for(hass, config_entry.entry_id)
+    client = await hass_client_no_auth()
+
+    response = await client.get(
+        f"{PROXY_VIEW_URL}/{grant}/viewer/camstack/embed/index.html",
+        headers={"Accept-Encoding": "gzip, deflate, br, zstd"},
+    )
+
+    assert response.status == 200
+    assert hub.requests[-1]["accept_encoding"] == "gzip, deflate"

@@ -91,6 +91,15 @@ _REQUEST_HEADERS_DROPPED = frozenset(
         hdrs.AUTHORIZATION,
     }
 )
+# What the relay asks the hub to compress with. NOT the browser's list: this
+# process decodes the body before re-sending it, and Home Assistant's aiohttp
+# cannot decode zstd without `backports.zstd`. Forwarding the browser's
+# `Accept-Encoding` verbatim made the hub answer in zstd and every relayed
+# request fail with "Can not decode content-encoding: zstandard (zstd)" — a
+# 502 painted into the dashboard, while the hub was perfectly healthy and
+# curl (which does not ask for zstd) saw nothing wrong.
+_ACCEPT_ENCODING = "gzip, deflate"
+
 _RESPONSE_HEADERS_DROPPED = frozenset(
     {
         hdrs.TRANSFER_ENCODING,
@@ -279,6 +288,8 @@ def _forward_headers(
     }
     if token is not None:
         headers[hdrs.AUTHORIZATION] = f"Bearer {token}"
+    # Never the browser's list — see `_ACCEPT_ENCODING`.
+    headers[hdrs.ACCEPT_ENCODING] = _ACCEPT_ENCODING
     # Where the hub is mounted, seen from the browser: the admin UI's index
     # answers with a `<base>` under it (the panel's contract).
     headers["X-Forwarded-Prefix"] = prefix
