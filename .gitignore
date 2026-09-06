@@ -11,3 +11,6 @@ htmlcov/
 # The add-on image is built from `dist/`, which is produced by the CamStack
 # build and is never committed here. See addon/README.md.
 addon/camstack/dist/
+
+# Agent worktrees and session files
+.claude/

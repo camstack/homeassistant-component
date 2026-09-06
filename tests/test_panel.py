@@ -225,7 +225,7 @@ async def test_the_mount_probe_reads_the_marker_the_hub_answers_with(
     config_entry: MockConfigEntry,
     socket_enabled: None,
 ) -> None:
-    """Direct, against a real listener: the marker means relay, anything else means not."""
+    """Against a real listener: the marker means relay, anything else does not."""
     seen: list[str | None] = []
 
     async def index(request: web.Request) -> web.Response:
