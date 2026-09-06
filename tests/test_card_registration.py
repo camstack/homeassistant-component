@@ -74,7 +74,13 @@ def test_every_card_frames_the_relay_and_probes_only_a_direct_hub(
     source = (ASSET_DIR / filename).read_text(encoding="utf-8")
     assert "result.proxy_base" in source, f"{filename}: ignores proxy_base"
     assert "${window.location.origin}${this._proxyBase}" in source
-    assert "if (!this._isRelayed()) {" in source, f"{filename}: no direct-frame branch"
+    # The certificate probe belongs to a DIRECT frame only: a relayed one is
+    # same-origin, and its answer is read back instead (`probeRelayedFrame`).
+    assert "probeHub(origin)" in source, f"{filename}: no certificate probe"
+    assert "probeRelayedFrame(" in source, (
+        f"{filename}: a relayed frame is not read back"
+    )
+    assert "_isRelayed()" in source, f"{filename}: the two probes are not told apart"
     assert "this._frameBase()" in source
 
 
