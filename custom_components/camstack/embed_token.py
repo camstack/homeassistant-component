@@ -199,9 +199,7 @@ class CamStackEmbedTokenView(HomeAssistantView):
         now = dt_util.utcnow().timestamp()
         cached = cache.get(key)
         if cached is not None and cached.is_usable(now):
-            return self.json(
-                {"token": cached.token, "expires_at": cached.expires_at}
-            )
+            return self.json({"token": cached.token, "expires_at": cached.expires_at})
 
         entry = hass.config_entries.async_get_entry(entry_id)
         client = getattr(getattr(entry, "runtime_data", None), "client", None)

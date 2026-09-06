@@ -117,8 +117,7 @@ async def test_the_two_view_kinds_do_not_share_a_token(
 
     assert mock_client.mutate.await_count == 2
     kinds = [
-        call.args[1]["scope"]["kind"]
-        for call in mock_client.mutate.await_args_list
+        call.args[1]["scope"]["kind"] for call in mock_client.mutate.await_args_list
     ]
     assert kinds == ["grid-view", "events-view"]
 
