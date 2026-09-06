@@ -288,6 +288,14 @@ CamStack apps do.
 Both have a UI editor: add them from the dashboard's card picker ("CamStack
 Grid", "CamStack Events") and pick cameras with checkboxes.
 
+**Everything the embed accepts as a fixed set of values is a dropdown or a set
+of checkboxes in that editor, never a text box.** Those lists are the embed's
+own (`events-config.ts`, `embed-grid-config.ts`), and
+`tests/test_card_editor_options.py` compares them against it — a value the
+embed adds or drops is a failing test, not a stale card. `classes` is the one
+open field: the hub serves its taxonomy at runtime, so the known classes are
+offered as suggestions and anything is still typeable.
+
 **The cards frame the hub THROUGH Home Assistant.** The hub serves HTTPS
 signed by its own local authority, and a browser that does not trust it
 blocks an iframe silently — no error, no interstitial, and the Home Assistant
@@ -325,7 +333,8 @@ aspect_ratio: "16:9"
 | `entities` | — | CamStack camera entities, in tile order. Their Home Assistant names caption the tiles |
 | `device_ids` | — | Hub device ids, when a camera has no entity. `entities` wins if both are set |
 | `title` | — | `ha-card` header |
-| `layout` | `auto` | `auto`, or a fixed column count (1–6) |
+| `layout` | `auto` | `auto`, or a fixed column count (1–12). Not used while the wall scrolls |
+| `max_visible` | — | How many cameras are on screen at once. The rest scroll **horizontally**. See below |
 | `aspect_ratio` | `16:9` | `16:9`, `4:3`, `3:2`, `1:1`, or `none` to use `height` |
 | `height` | `400` | Card height in pixels, used when `aspect_ratio: none` |
 | `quality` | `auto` | `auto`, `high`, `mid`, `low` |
@@ -333,6 +342,26 @@ aspect_ratio: "16:9"
 | `show_boxes` | `false` | Live detection boxes |
 | `active_only` | `false` | Only cameras currently active |
 | `url_base` | — | Override the hub address. Leave empty: the card asks the integration |
+
+#### Showing a few cameras and scrolling to the rest
+
+`max_visible: 4` on a wall of twelve cameras shows four, and the other eight are
+one horizontal scroll away.
+
+The scroller is the CARD's, not the embed's: the embed fits every tile into the
+box it is handed and has no scrolling of its own. So with a cap in force the
+card makes the frame `total / max_visible` times as wide as itself, and asks the
+embed for a **single row of every camera** — which is why `layout` is then not
+consulted. Two column controls that disagree would be worse than one, and the
+tile size is exactly one `max_visible`th of the card's width either way. The
+card's shape follows from the cap for the same reason, so `aspect_ratio` and
+`height` are ignored while it scrolls. A cap that is not reached (four cameras,
+`max_visible: 4`) changes nothing at all.
+
+Changing any of this — the cap, the columns, the quality, the camera list —
+reaches the wall over the embed's open command channel and **does not restart
+the streams**. Before 0.5.18 a touch of the card editor rebuilt the iframe,
+which renegotiates every WebRTC session on the wall.
 
 #### What the tile buttons do
 
@@ -378,10 +407,26 @@ rows: 1
 | `rows` | `1` | Reel depth, 1–6 |
 | `columns` | `auto` | Gallery columns |
 | `height` | *fitted* | Pixels. Left empty the reel height is COMPUTED from `thumb` and `rows` — the hub's card is a fixed size and a shorter frame silently cuts the timestamp off every card |
-| `classes` | — | Object classes, e.g. `[person, vehicle]` |
+| `sort` | `time` | `time` (newest first) or `importance`. Importance orders the rows **already loaded** — the hub paginates by time — so pair it with `max_age_ms` for a stable top-N |
+| `fields` | *all five* | What each card shows: any of `label`, `sublabel`, `camera`, `time`, `badges`. **`badges` carries the zone chips and the importance dot — untick it to hide importance.** An empty list is a real setting: pictures only |
+| `attributes` | — | Keep only tracks carrying `face` and/or `plate`. This is a second axis, ANDed with the classes and the search |
+| `classes` | — | Object classes, e.g. `[person, vehicle]`. Open set — the editor suggests the known ones |
 | `search` | — | Free-text search |
+| `search_mode` | `text` | `text` narrows what is loaded; `semantic` is a CLIP query over the whole window, and REPLACES the feed with score-ordered hits |
+| `semantic_limit` | `50` | 1–200, semantic search only |
+| `semantic_min_score` | `0.2` | 0–1, semantic search only |
+| `page_size` | `60` | Rows per page, 1–500 |
+| `max` | `5000` | Ceiling on rows held in memory, 1–5000. A memory bound, not the end of history |
+| `refresh_ms` | `0` | Auto-refresh interval in ms, `0` = off, max `600000` |
+| `max_age_ms` | *30 days* | Only events newer than this. Minimum `60000` |
 | `theme` | `auto` | `auto`, `dark`, `light` |
 | `url_base` | — | Hub address override |
+
+Two of the embed's parameters are deliberately **not** card options: `since` and
+`until`, its absolute epoch bounds. A dashboard card is permanent, and a frozen
+window would stop it dead on a date nobody remembers setting — `max_age_ms` is
+the rolling version and is here. Device names ride the cards automatically, from
+each entity's Home Assistant name.
 
 ### How the cards authenticate
 

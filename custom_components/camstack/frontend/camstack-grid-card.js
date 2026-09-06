@@ -47,7 +47,15 @@
  * `set hass` fires several times a second on a busy instance. Rebuilding the
  * iframe restarts every WebRTC session on the wall, so the frame is recreated
  * only when the composed URL changes; a changed device list or layout is sent
- * over the open channel instead.
+ * over the open channel instead — `_publishWall`.
+ *
+ * That last clause was a PROMISE, not a fact, until 2026-09-06: the card
+ * re-sent `embed-config`, which `acquireConfig` resolves exactly once, so a
+ * changed column count or camera list reached the wall only when something
+ * else happened to rebuild the frame. Every option this card offers must ride
+ * a COMMAND (`_postCommand`), and be re-pushed when the page reports `ready`
+ * — a remounted page seeded itself from a config that is stale by every edit
+ * since it was sent.
  *
  * ## Why this card has to answer the tiles
  *
@@ -133,6 +141,43 @@ const DEFAULT_HEIGHT = 400;
 const DEFAULT_ASPECT = "16:9";
 /** Re-mint this long before the token dies, so a stream never drops on expiry. */
 const TOKEN_RENEW_MARGIN_MS = 120000;
+
+/**
+ * The grid embed's option contract, MIRRORED — a Lovelace card is plain
+ * JavaScript and cannot import the viewer's TypeScript, so the values are
+ * copied from `camstack/embed/src/embed/embed-grid-config.ts` and
+ * `tests/test_card_editor_options.py` diffs the copy against those Zod schemas
+ * whenever the viewer is checked out beside this repo. It exists so that no
+ * option with a finite set of values is ever a text box: the embed normalises
+ * or refuses an unknown one, and the card has nothing to say about why.
+ *
+ * `quality` is `gridQualitySchema` verbatim (the system profile enum plus
+ * `auto`); `layout` is the fixed column count `gridLayoutSchema` accepts.
+ * `max_visible` has NO counterpart in the embed — see `_scrollGeometry`.
+ */
+const EMBED_CONTRACT = {
+  quality: ["auto", "high", "mid", "low"],
+  layout: [1, 12],
+  max_visible: [1, 12],
+};
+
+/** The words for `gridQualitySchema`. An unknown tier keeps its own id rather
+ *  than showing a blank option — the contract test is what catches the drift. */
+const QUALITY_LABELS = {
+  auto: "Automatic",
+  high: "High",
+  mid: "Medium",
+  low: "Low",
+};
+
+/** `[min, max]` from the contract as `[value, label]` select options. */
+function countOptions([min, max]) {
+  const options = [];
+  for (let n = min; n <= max; n += 1) {
+    options.push([String(n), String(n)]);
+  }
+  return options;
+}
 
 const ASPECT_RATIOS = {
   "16:9": 16 / 9,
@@ -248,6 +293,10 @@ class CamstackGridCard extends HTMLElement {
     this._retryAttempt = 0;
     this._grantRetried = false;
     this._embedReady = false;
+    this._scroller = null;
+    /** What this card has already pushed on the open channel, per command — so
+     *  a `set hass` storm re-sends nothing and a real change re-sends once. */
+    this._publishedWall = {};
     /**
      * The host-owned tile state. The embed holds no opinion of its own about
      * either: its buttons post an intent and render what comes back.
@@ -388,9 +437,19 @@ class CamstackGridCard extends HTMLElement {
     }
   }
 
+  /**
+   * A new config. It does NOT rebuild the frame.
+   *
+   * It used to: `_renderedKey = null` forced `_mountFrame` to build a fresh
+   * iframe, so every touch of a setting in the card editor renegotiated every
+   * WebRTC session on the wall — which is the one thing this card's whole
+   * mount discipline exists to avoid, paid on the surface where the operator
+   * is watching the wall change. The frame's own inputs (the hub, the grant)
+   * are in `_mountFrame`'s key already, so a change to one of them still
+   * rebuilds; everything else now travels as a command (`_publishWall`).
+   */
   setConfig(config) {
     this._config = config || {};
-    this._renderedKey = null;
     this._sentConfigKey = null;
     this._render();
   }
@@ -675,6 +734,47 @@ class CamstackGridCard extends HTMLElement {
   _republishHostState() {
     this._postCommand("setAudioOn", [...this._audioOnIds]);
     this._postCommand("setPaused", [...this._pausedIds]);
+    // The page seeded itself from a config that is stale by every edit since —
+    // and after a remount it is stale by all of them.
+    this._publishWall(true);
+  }
+
+  /**
+   * Push the wall settings the CONFIG owns onto the open channel.
+   *
+   * `acquireConfig` resolves ONCE (`host-bridge.ts`), so a second
+   * `embed-config` is read by nobody: until this existed, a changed column
+   * count, quality or camera list reached the wall only when something else
+   * rebuilt the iframe — and rebuilding it renegotiates every WebRTC session,
+   * the exact cost this card is built to avoid. The file header promised the
+   * open channel for years; this is the code that keeps the promise.
+   *
+   * Diffed, not re-sent: `set hass` fires several times a second and each
+   * command is a state change to the page. `force` is for a page that has just
+   * (re)mounted, where the mirror says "already sent" about a page that never
+   * received it.
+   */
+  _publishWall(force) {
+    const deviceIds = this._deviceIds();
+    if (!deviceIds.length || !this._iframe) {
+      return;
+    }
+    const wall = {
+      setDevices: deviceIds,
+      setLayout: this._layout(deviceIds),
+      setQuality: this._config.quality || "auto",
+      setShowName: this._config.show_names !== false,
+      setActiveOnly: this._config.active_only === true,
+      setShowBoxes: this._config.show_boxes === true,
+    };
+    for (const kind of Object.keys(wall)) {
+      const encoded = JSON.stringify(wall[kind]);
+      if (!force && this._publishedWall[kind] === encoded) {
+        continue;
+      }
+      this._publishedWall[kind] = encoded;
+      this._postCommand(kind, wall[kind]);
+    }
   }
 
   /**
@@ -759,7 +859,7 @@ class CamstackGridCard extends HTMLElement {
       serverUrl,
       ...(grant && grant.token ? { token: grant.token } : {}),
       devices: deviceIds,
-      layout: this._layout(),
+      layout: this._layout(deviceIds),
       quality: this._config.quality || "auto",
       showName: this._config.show_names !== false,
       showBadges: this._config.show_badges !== false,
@@ -799,13 +899,49 @@ class CamstackGridCard extends HTMLElement {
     }
   }
 
-  _layout() {
+  /**
+   * The wall's column count — DERIVED when the card is scrolling.
+   *
+   * The embed fits every tile into the box it is handed and never scrolls
+   * (`EmbedGridPage` has no `overflow` of its own), so a cap on what is visible
+   * can only be the host's. But two column controls that disagree are worse
+   * than one: with a cap in force the embed is told to lay ONE row of every
+   * camera and the host's scroller decides how much of that row is on screen.
+   * `layout` is then not a second opinion, it is simply not consulted.
+   */
+  _layout(deviceIds) {
+    if (this._scrollGeometry(deviceIds)) {
+      return deviceIds.length;
+    }
     const raw = this._config.layout;
     if (raw === undefined || raw === null || raw === "auto" || raw === "") {
       return "auto";
     }
     const columns = typeof raw === "string" ? parseInt(raw, 10) : raw;
     return Number.isInteger(columns) && columns >= 1 ? columns : "auto";
+  }
+
+  /** The cameras this card shows, whatever it was configured with. */
+  _deviceIds() {
+    return this._hass ? resolveDeviceIds(this._hass, this._config) : [];
+  }
+
+  /**
+   * `{ maxVisible, total }` when the wall is a scrolling strip, else null.
+   *
+   * Null whenever the cap is off, illegal, or simply NOT REACHED — a wall of
+   * three cameras with a cap of four is the wall that already shipped, and it
+   * must not become a strip with two thirds of the card empty.
+   */
+  _scrollGeometry(deviceIds) {
+    const [min, max] = EMBED_CONTRACT.max_visible;
+    const raw = this._config.max_visible;
+    const cap = typeof raw === "string" ? parseInt(raw, 10) : raw;
+    if (!Number.isInteger(cap) || cap < min || cap > max) {
+      return null;
+    }
+    const total = Array.isArray(deviceIds) ? deviceIds.length : 0;
+    return total > cap ? { maxVisible: cap, total } : null;
   }
 
   // ── rendering ────────────────────────────────────────────────────────────
@@ -816,7 +952,36 @@ class CamstackGridCard extends HTMLElement {
       : DEFAULT_HEIGHT;
   }
 
+  /** The scroll container. Inert unless a cap is in force, so a wall that fits
+   *  is laid out exactly as it was before this option existed. */
+  _scrollerStyle() {
+    return this._scrollGeometry(this._deviceIds())
+      ? "overflow-x:auto;overflow-y:hidden;width:100%;-webkit-overflow-scrolling:touch;"
+      : "width:100%;";
+  }
+
+  /**
+   * The iframe's own box.
+   *
+   * Scrolling: the frame is made `total / maxVisible` times as wide as the
+   * card and the embed is asked for a single row of `total` tiles, so a tile is
+   * exactly one `maxVisible`th of the visible width. The shape follows from
+   * that — `16·total : 9` is a one-row strip of 16:9 tiles — and it has to,
+   * because the embed CENTRES its wall inside whatever box it is given: a box
+   * of the wrong shape becomes a band of padding above and below the strip.
+   * Which is also why `aspect_ratio` / `height` are not consulted here: with a
+   * cap the shape is a consequence of the cap, and two controls for one shape
+   * is the argument this card refuses to have.
+   */
   _frameStyle() {
+    const geometry = this._scrollGeometry(this._deviceIds());
+    if (geometry) {
+      const width = ((geometry.total / geometry.maxVisible) * 100).toFixed(4);
+      return (
+        `width:${width}%;aspect-ratio:${16 * geometry.total} / 9;` +
+        "border:none;display:block;border-radius:8px;"
+      );
+    }
     const aspect = this._config.aspect_ratio || DEFAULT_ASPECT;
     if (aspect !== "none" && ASPECT_RATIOS[aspect]) {
       // `aspect-ratio` keeps the wall the right shape on a phone and on a wall
@@ -883,8 +1048,15 @@ class CamstackGridCard extends HTMLElement {
     // the open channel; putting it here would restart every stream on a rename.
     this._mountFrame(`${base}${EMBED_PATH}?mode=grid`, null);
     if (this._iframe) {
+      // Re-applied on every render, never only at mount: adding a camera or
+      // moving the cap changes the strip's width and shape, and neither may
+      // cost a frame rebuild.
       this._iframe.style.cssText = this._frameStyle();
+      if (this._scroller) {
+        this._scroller.style.cssText = this._scrollerStyle();
+      }
       this._sendConfig();
+      this._publishWall(false);
     }
   }
 
@@ -896,6 +1068,9 @@ class CamstackGridCard extends HTMLElement {
     }
     this._renderedKey = key;
     this._sentConfigKey = null;
+    // A new page has been pushed nothing yet, and it seeds itself from the
+    // handshake config — so the diff starts empty rather than replaying.
+    this._publishedWall = {};
     this._buildCard(frameUrl, emptyText);
   }
 
@@ -915,15 +1090,25 @@ class CamstackGridCard extends HTMLElement {
       card.appendChild(wrapper);
       this.shadowRoot.replaceChildren(card);
       this._iframe = null;
+      this._scroller = null;
       this._status = null;
       return;
     }
+
+    // The frame always sits in a scroller. It is inert until a cap is set, and
+    // building it unconditionally keeps the cap out of `_mountFrame`'s key —
+    // rebuilding the frame would restart every WebRTC session on the wall.
+    const scroller = document.createElement("div");
+    scroller.dataset.scroller = "wall";
+    scroller.style.cssText = this._scrollerStyle();
 
     const iframe = document.createElement("iframe");
     iframe.src = frameUrl;
     iframe.allow = "autoplay; fullscreen; microphone";
     iframe.style.cssText = this._frameStyle();
-    wrapper.appendChild(iframe);
+    scroller.appendChild(iframe);
+    wrapper.appendChild(scroller);
+    this._scroller = scroller;
 
     const status = document.createElement("div");
     status.style.cssText =
@@ -993,15 +1178,21 @@ class CamstackGridCardEditor extends HTMLElement {
       cameraPicker("entities", "Cameras", config.entities || [], this._cameras(), (id) =>
         friendlyName(this._hass, id)
       ),
-      selectField("layout", "Columns", config.layout ?? "auto", [
-        ["auto", "Automatic"],
-        ["1", "1"],
-        ["2", "2"],
-        ["3", "3"],
-        ["4", "4"],
-        ["5", "5"],
-        ["6", "6"],
-      ]),
+      selectField(
+        "max_visible",
+        "Cameras visible at once (the rest scroll horizontally)",
+        String(config.max_visible ?? "off"),
+        [
+          ["off", "All of them, no scrolling"],
+          ...countOptions(EMBED_CONTRACT.max_visible),
+        ]
+      ),
+      selectField(
+        "layout",
+        "Columns (not used while the wall scrolls)",
+        String(config.layout ?? "auto"),
+        [["auto", "Automatic"], ...countOptions(EMBED_CONTRACT.layout)]
+      ),
       selectField("aspect_ratio", "Shape", config.aspect_ratio || DEFAULT_ASPECT, [
         ["16:9", "16:9"],
         ["4:3", "4:3"],
@@ -1010,12 +1201,12 @@ class CamstackGridCardEditor extends HTMLElement {
         ["none", "Fixed height (px)"],
       ]),
       numberField("height", "Height in px (used when shape is fixed)", config.height ?? DEFAULT_HEIGHT),
-      selectField("quality", "Stream quality", config.quality || "auto", [
-        ["auto", "Automatic"],
-        ["high", "High"],
-        ["mid", "Medium"],
-        ["low", "Low"],
-      ]),
+      selectField(
+        "quality",
+        "Stream quality",
+        config.quality || "auto",
+        EMBED_CONTRACT.quality.map((value) => [value, QUALITY_LABELS[value] || value])
+      ),
       checkboxField("show_names", "Show the camera name on each tile", config.show_names !== false),
       checkboxField("show_boxes", "Show detection boxes", config.show_boxes === true),
       checkboxField("active_only", "Only cameras that are currently active", config.active_only === true),
@@ -1038,6 +1229,12 @@ class CamstackGridCardEditor extends HTMLElement {
     config.entities = readChecked(root, "entities");
     const layout = readText(root, "layout");
     config.layout = layout === "auto" ? "auto" : parseInt(layout, 10);
+    const maxVisible = parseInt(readText(root, "max_visible"), 10);
+    if (Number.isInteger(maxVisible)) {
+      config.max_visible = maxVisible;
+    } else {
+      delete config.max_visible;
+    }
     config.aspect_ratio = readText(root, "aspect_ratio") || DEFAULT_ASPECT;
     config.height = parseInt(readText(root, "height"), 10) || DEFAULT_HEIGHT;
     config.quality = readText(root, "quality") || "auto";

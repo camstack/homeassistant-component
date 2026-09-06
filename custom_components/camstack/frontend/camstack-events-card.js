@@ -99,8 +99,63 @@ const CARD_TAG = "camstack-events-card";
 const EDITOR_TAG = "camstack-events-card-editor";
 const EMBED_PATH = "/viewer/camstack/embed/index.html";
 const EVENTS_URL_VERSION = "1";
-const DEFAULT_FIELDS = "label,sublabel,camera,time,badges";
 const DEFAULT_GALLERY_HEIGHT = 420;
+
+/**
+ * The events embed's own option contract, MIRRORED.
+ *
+ * Every list below is a Zod enum in `camstack/embed/src/embed/events-config.ts`
+ * (or `events-share-url.ts` for the attributes). A Lovelace card is plain
+ * JavaScript and cannot import TypeScript, so the values are copied — and a
+ * copy nobody diffs is a copy that rots. `tests/test_card_editor_options.py`
+ * reads this block and compares it to those enums whenever the viewer is
+ * checked out beside this repo, and to its own expectation always.
+ *
+ * They exist so that no option with a finite set of values is ever a text box:
+ * the embed rejects an unknown value and the card is then an empty frame with
+ * nothing to say about why.
+ *
+ * The numeric pairs are `[min, max]` from the same schema; `0` as a max means
+ * the schema sets none. `classes` is the exception and is a SUGGESTION list:
+ * the taxonomy is served by the hub at runtime (`events-taxonomy.ts`), so a
+ * class this list has never heard of must still be typeable.
+ */
+const EMBED_CONTRACT = {
+  view: ["reel", "gallery"],
+  thumb: ["small", "medium", "large"],
+  theme: ["auto", "dark", "light"],
+  sort: ["time", "importance"],
+  search_mode: ["text", "semantic"],
+  fields: ["label", "sublabel", "camera", "time", "badges"],
+  attributes: ["face", "plate"],
+  classes: ["person", "vehicle", "animal", "audio", "motion"],
+  rows: [1, 6],
+  columns: [1, 12],
+  page_size: [1, 500],
+  max: [1, 5000],
+  refresh_ms: [0, 600000],
+  max_age_ms: [60000, 0],
+  semantic_limit: [1, 200],
+  semantic_min_score: [0, 1],
+};
+
+/** What each `fields` key actually shows, in the operator's words. `badges`
+ *  carries the zone chips AND the importance dot — turning it off is how a
+ *  dashboard hides importance. */
+const FIELD_LABELS = {
+  label: "Title chip over the thumbnail",
+  sublabel: "Secondary line (detection class / audio labels)",
+  camera: "Camera name",
+  time: "Time",
+  badges: "Zone chips and the importance dot",
+};
+
+const ATTRIBUTE_LABELS = {
+  face: "Has a face",
+  plate: "Has a plate",
+};
+
+const DEFAULT_FIELDS = EMBED_CONTRACT.fields.join(",");
 /** Re-mint this long before the token dies. */
 const TOKEN_RENEW_MARGIN_MS = 120000;
 
@@ -470,6 +525,42 @@ class CamstackEventsCard extends HTMLElement {
     return Number.isInteger(raw) && raw >= 1 && raw <= 6 ? raw : 1;
   }
 
+  /**
+   * The `fields=` allow-list.
+   *
+   * An EMPTY selection is a real ask — the embed reads `fields=` as "images
+   * only" — so an array must be sent verbatim even when it is empty, and only
+   * an ABSENT `fields` may fall back to the default. A pre-0.5.16 card stored
+   * the csv string; it is still honoured so an upgrade changes no dashboard.
+   */
+  _fields() {
+    const raw = this._config.fields;
+    if (Array.isArray(raw)) {
+      return raw
+        .map((entry) => String(entry).trim())
+        .filter((entry) => EMBED_CONTRACT.fields.includes(entry))
+        .join(",");
+    }
+    if (typeof raw === "string") {
+      return raw.trim();
+    }
+    return DEFAULT_FIELDS;
+  }
+
+  /** One bounded integer from the config, or "" when it is unset or illegal —
+   *  the embed rejects the whole URL over an out-of-range value. */
+  _bounded(key, [min, max]) {
+    const raw = this._config[key];
+    if (raw === undefined || raw === null || raw === "") {
+      return "";
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < min || (max > 0 && n > max)) {
+      return "";
+    }
+    return String(n);
+  }
+
   _frameHeight() {
     if (Number(this._config.height) > 0) {
       return Number(this._config.height);
@@ -487,7 +578,9 @@ class CamstackEventsCard extends HTMLElement {
     params.set("view", this._view());
     params.set("thumb", this._thumb());
     params.set("theme", this._config.theme || "auto");
-    params.set("fields", this._config.fields || DEFAULT_FIELDS);
+    // Always sent: an empty allow-list means "images only", which absence does
+    // not — see `_fields`.
+    params.set("fields", this._fields());
     if (this._view() === "reel") {
       params.set("rows", String(this._rows()));
     } else if (this._config.columns) {
@@ -503,17 +596,26 @@ class CamstackEventsCard extends HTMLElement {
     if (this._config.search) {
       params.set("q", String(this._config.search));
     }
-    if (this._config.sort) {
+    if (EMBED_CONTRACT.search_mode.includes(this._config.search_mode)) {
+      params.set("smode", String(this._config.search_mode));
+    }
+    if (EMBED_CONTRACT.sort.includes(this._config.sort)) {
       params.set("sort", String(this._config.sort));
     }
-    if (Number(this._config.max) > 0) {
-      params.set("max", String(parseInt(this._config.max, 10)));
-    }
-    if (Number(this._config.refresh_ms) > 0) {
-      params.set("refresh", String(parseInt(this._config.refresh_ms, 10)));
-    }
-    if (Number(this._config.max_age_ms) > 0) {
-      params.set("age", String(parseInt(this._config.max_age_ms, 10)));
+    // Every remaining option is a bounded number the embed validates: an
+    // out-of-range value fails the WHOLE parse, so it is dropped here instead.
+    for (const [key, param] of [
+      ["semantic_limit", "slimit"],
+      ["semantic_min_score", "sscore"],
+      ["page_size", "page"],
+      ["max", "max"],
+      ["refresh_ms", "refresh"],
+      ["max_age_ms", "age"],
+    ]) {
+      const value = this._bounded(key, EMBED_CONTRACT[key]);
+      if (value !== "") {
+        params.set(param, value);
+      }
     }
     // Appended raw: `names` carries per-name percent-encoding that
     // URLSearchParams would encode a second time.
@@ -689,21 +791,10 @@ class CamstackEventsCardEditor extends HTMLElement {
         ["medium", "Medium"],
         ["large", "Large"],
       ]),
-      select("rows", "Reel rows", String(config.rows || 1), [
-        ["1", "1"],
-        ["2", "2"],
-        ["3", "3"],
-        ["4", "4"],
-        ["5", "5"],
-        ["6", "6"],
-      ]),
+      select("rows", "Reel rows", String(config.rows || 1), range(EMBED_CONTRACT.rows)),
       select("columns", "Gallery columns", String(config.columns || "auto"), [
         ["auto", "Automatic"],
-        ["2", "2"],
-        ["3", "3"],
-        ["4", "4"],
-        ["6", "6"],
-        ["8", "8"],
+        ...range(EMBED_CONTRACT.columns),
       ]),
       field(
         "height",
@@ -712,14 +803,64 @@ class CamstackEventsCardEditor extends HTMLElement {
         config.height,
         ""
       ),
-      field(
+      select("sort", "Order", config.sort || "time", [
+        ["time", "Newest first"],
+        ["importance", "Most important first (of what is loaded)"],
+      ]),
+      checkboxGroup(
+        "fields",
+        "What each card shows",
+        fieldSelection(config),
+        EMBED_CONTRACT.fields.map((key) => [key, FIELD_LABELS[key]])
+      ),
+      checkboxGroup(
+        "attributes",
+        "Only tracks that carry (nothing ticked = no attribute filter)",
+        Array.isArray(config.attributes) ? config.attributes : [],
+        EMBED_CONTRACT.attributes.map((key) => [key, ATTRIBUTE_LABELS[key]])
+      ),
+      suggestField(
         "classes",
         "Object classes (comma separated, empty = all)",
-        "text",
         csv(config.classes),
-        "person, vehicle"
+        "person, vehicle",
+        EMBED_CONTRACT.classes
       ),
       field("search", "Search text (optional)", "text", config.search, ""),
+      select("search_mode", "How the search text is matched", config.search_mode || "text", [
+        ["text", "Text — narrows what is already loaded"],
+        ["semantic", "Semantic — a CLIP query over the whole window"],
+      ]),
+      field(
+        "semantic_limit",
+        "Semantic results (1–200, semantic search only)",
+        "number",
+        config.semantic_limit,
+        "50"
+      ),
+      field(
+        "semantic_min_score",
+        "Minimum semantic score (0–1, semantic search only)",
+        "number",
+        config.semantic_min_score,
+        "0.2"
+      ),
+      field("page_size", "Rows per page (1–500)", "number", config.page_size, "60"),
+      field("max", "Maximum rows held (1–5000)", "number", config.max, "5000"),
+      field(
+        "refresh_ms",
+        "Auto-refresh in ms (0 = off, max 600000)",
+        "number",
+        config.refresh_ms,
+        "0"
+      ),
+      field(
+        "max_age_ms",
+        "Only events newer than, in ms (minimum 60000)",
+        "number",
+        config.max_age_ms,
+        "2592000000"
+      ),
       select("theme", "Theme", config.theme || "auto", [
         ["auto", "Follow the dashboard"],
         ["dark", "Dark"],
@@ -785,6 +926,33 @@ class CamstackEventsCardEditor extends HTMLElement {
       delete config.classes;
     }
     assign("search", text("search"));
+    config.sort = text("sort") === "importance" ? "importance" : "time";
+    config.search_mode = text("search_mode") === "semantic" ? "semantic" : "text";
+    // Written even when EMPTY: the embed reads an empty allow-list as "images
+    // only", and a deleted key would silently restore all five.
+    config.fields = readGroup(root, "fields");
+    const attributes = readGroup(root, "attributes");
+    if (attributes.length) {
+      config.attributes = attributes;
+    } else {
+      delete config.attributes;
+    }
+    for (const key of [
+      "semantic_limit",
+      "semantic_min_score",
+      "page_size",
+      "max",
+      "refresh_ms",
+      "max_age_ms",
+    ]) {
+      const [min, max] = EMBED_CONTRACT[key];
+      const value = Number(text(key));
+      if (text(key) !== "" && Number.isFinite(value) && value >= min && (max <= 0 || value <= max)) {
+        config[key] = value;
+      } else {
+        delete config[key];
+      }
+    }
     config.theme = text("theme") || "auto";
     assign("url_base", text("url_base"));
     this.dispatchEvent(
@@ -818,6 +986,96 @@ function field(id, label, type, value, placeholder) {
   }
   input.style.cssText = "padding:8px;box-sizing:border-box;width:100%;";
   return labelled(id, label, input);
+}
+
+/**
+ * A text input with SUGGESTIONS — the open-set counterpart of `select`.
+ *
+ * Used for `classes`, whose vocabulary the hub serves at runtime: constraining
+ * it to a list this file happens to know would hide every class the hub learns
+ * after this release. So the known macro classes are offered and anything is
+ * still typeable.
+ */
+function suggestField(id, label, value, placeholder, suggestions) {
+  const wrap = document.createElement("div");
+  const input = document.createElement("input");
+  input.id = id;
+  input.type = "text";
+  input.value = value == null ? "" : String(value);
+  input.setAttribute("list", `${id}-suggestions`);
+  if (placeholder) {
+    input.placeholder = placeholder;
+  }
+  input.style.cssText = "padding:8px;box-sizing:border-box;width:100%;";
+  const list = document.createElement("datalist");
+  list.id = `${id}-suggestions`;
+  for (const suggestion of suggestions) {
+    const option = document.createElement("option");
+    option.value = suggestion;
+    list.appendChild(option);
+  }
+  wrap.append(input, list);
+  return labelled(id, label, wrap);
+}
+
+/**
+ * A real multi-selection over a CLOSED set — never a comma string.
+ *
+ * `fields` and `attrs` are sets in the embed's schema. Asking an operator to
+ * compose `label,sublabel,camera` by hand is asking for the one typo the embed
+ * answers by refusing the whole URL.
+ */
+function checkboxGroup(id, label, selected, options) {
+  const box = document.createElement("div");
+  box.dataset.group = id;
+  box.style.cssText =
+    "display:flex;flex-direction:column;gap:4px;border:1px solid var(--divider-color,#444);" +
+    "border-radius:6px;padding:8px;";
+  for (const [value, caption] of options) {
+    const row = document.createElement("label");
+    row.style.cssText = "display:flex;align-items:center;gap:8px;font-size:14px;";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = value;
+    input.checked = selected.includes(value);
+    const text = document.createElement("span");
+    text.textContent = caption;
+    row.append(input, text);
+    box.appendChild(row);
+  }
+  return labelled(id, label, box);
+}
+
+function readGroup(root, id) {
+  const box = root.querySelector(`[data-group="${id}"]`);
+  if (!box) {
+    return [];
+  }
+  return Array.from(box.querySelectorAll("input[type=checkbox]"))
+    .filter((input) => input.checked)
+    .map((input) => input.value);
+}
+
+/** `[min, max]` from the embed contract as `[value, label]` select options. */
+function range([min, max]) {
+  const options = [];
+  for (let n = min; n <= max; n += 1) {
+    options.push([String(n), String(n)]);
+  }
+  return options;
+}
+
+/** Which `fields` keys are ticked, honouring the pre-0.5.16 csv string and
+ *  treating an EMPTY array as the deliberate "images only". */
+function fieldSelection(config) {
+  const raw = config.fields;
+  if (Array.isArray(raw)) {
+    return raw.map((entry) => String(entry));
+  }
+  if (typeof raw === "string") {
+    return raw.split(",").map((entry) => entry.trim());
+  }
+  return EMBED_CONTRACT.fields.slice();
 }
 
 function select(id, label, value, options) {
