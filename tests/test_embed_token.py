@@ -38,13 +38,20 @@ async def test_a_card_is_given_a_scoped_share_token_never_the_hub_credential(
     config_entry: MockConfigEntry,
     hass_client: ClientSessionGenerator,
 ) -> None:
-    """The OAuth token stays in Home Assistant; the browser gets `csv_…`."""
+    """The OAuth token stays in Home Assistant; the browser gets `csv_…`.
+
+    `direct`: this is the card that frames the hub itself, with no relay in
+    front of it. It is the only shape that still needs the credential in the
+    browser — see the relayed test below.
+    """
     await setup_integration(hass, config_entry)
     mock_client.mutate.reset_mock()
     mock_client.mutate.return_value = minted()
     client = await hass_client()
 
-    response = await post(client, {"kind": "grid-view", "device_ids": [EXPORTED]})
+    response = await post(
+        client, {"kind": "grid-view", "device_ids": [EXPORTED], "direct": True}
+    )
 
     assert response.status == 200
     payload = await response.json()
@@ -204,3 +211,101 @@ def test_the_device_id_list_is_cleaned_without_being_reordered() -> None:
     # `True` is an `int` in Python and would silently become device 1.
     assert parse_device_ids([True]) is None
     assert parse_device_ids(list(range(65))) is None
+
+
+async def test_the_relayed_mint_keeps_the_token_inside_home_assistant(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hass_client: ClientSessionGenerator,
+) -> None:
+    """The default answer carries the grant, and NOT the credential.
+
+    A card without `url_base` reaches the hub through `proxy.py`, which strips
+    the browser's `Authorization` and injects the share token itself. A copy of
+    that token in the page authenticates nothing there, and it used to sit in
+    the events iframe's `#t=` fragment — in browser history, in screenshots,
+    usable against the hub from outside Home Assistant for the rest of its hour.
+    """
+    await setup_integration(hass, config_entry)
+    mock_client.mutate.reset_mock()
+    mock_client.mutate.return_value = minted()
+    client = await hass_client()
+
+    response = await post(client, {"kind": "grid-view", "device_ids": [EXPORTED]})
+
+    assert response.status == 200
+    payload = await response.json()
+    assert "token" not in payload
+    assert "csv_deadbeef" not in await response.text()
+    # The grant IS handed over: it is what authorises the frame, and unlike the
+    # token it only works from a Home Assistant session and dies with it.
+    assert payload["proxy_base"]
+    # And the expiry, because the card has to know when to come back for a
+    # fresh grant. It is not a secret.
+    assert payload["expires_at"] == 4_000_000_000.0
+    # The hub was still asked for a real, scoped token — the credential exists,
+    # it simply stays here.
+    mock_client.mutate.assert_awaited_once()
+
+
+async def test_an_events_card_is_relayed_by_default_too(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hass_client: ClientSessionGenerator,
+) -> None:
+    """The reel was the worst offender: its token rode the iframe URL."""
+    await setup_integration(hass, config_entry)
+    mock_client.mutate.reset_mock()
+    mock_client.mutate.return_value = minted()
+    client = await hass_client()
+
+    response = await post(client, {"kind": "events-view", "device_ids": [EXPORTED]})
+
+    assert response.status == 200
+    assert "token" not in await response.json()
+
+
+async def test_the_cached_answer_withholds_the_token_as_well(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hass_client: ClientSessionGenerator,
+) -> None:
+    """The cache serves the same MintedToken to both paths; only the answer differs.
+
+    Without this the second render of a relayed card — served from the cache,
+    not from a fresh mint — would leak what the first one withheld.
+    """
+    await setup_integration(hass, config_entry)
+    mock_client.mutate.reset_mock()
+    mock_client.mutate.return_value = minted()
+    client = await hass_client()
+
+    direct = await post(
+        client, {"kind": "grid-view", "device_ids": [EXPORTED], "direct": True}
+    )
+    relayed = await post(client, {"kind": "grid-view", "device_ids": [EXPORTED]})
+
+    assert (await direct.json())["token"] == "csv_deadbeef"
+    assert "token" not in await relayed.json()
+    assert mock_client.mutate.await_count == 1
+
+
+async def test_direct_must_be_a_boolean(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hass_client: ClientSessionGenerator,
+) -> None:
+    """A truthy string must not talk its way into a credential."""
+    await setup_integration(hass, config_entry)
+    mock_client.mutate.return_value = minted()
+    client = await hass_client()
+
+    response = await post(
+        client, {"kind": "grid-view", "device_ids": [EXPORTED], "direct": "yes"}
+    )
+
+    assert response.status == 400

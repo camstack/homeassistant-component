@@ -367,6 +367,19 @@ device ids that card shows, valid for one hour and re-minted as it ages. The
 endpoint refuses any device this entry does not export as a camera, so a
 dashboard cannot become a general-purpose minting endpoint for the hub.
 
+**And on the normal path that share token never reaches the browser either.**
+A card without `url_base` frames the hub through Home Assistant's relay, which
+strips the browser's `Authorization` header and injects the share token itself,
+server-side, on every forwarded request — HTTP and the WebSocket alike. A copy
+of the token in the page would authenticate nothing there and would only sit in
+the address bar, in browser history and in every screenshot of the dashboard,
+where anyone could copy it and use it against the hub from outside Home
+Assistant for the rest of its hour. So the mint answer carries only
+`proxy_base` (the grant — same-origin, revocable, dead when the token dies) and
+`expires_at`. A card configured with an explicit `url_base` has no relay in
+front of it, asks with `direct: true`, and is the one case that still gets the
+credential.
+
 **Known gap — event thumbnails.** The hub's event-media plane accepts a session
 or scoped token and answers `401` to a share token, even for a device inside
 that token's own scope. Until that gate accepts a scoped share token, the events

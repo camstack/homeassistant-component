@@ -342,3 +342,50 @@ async def test_the_panels_grant_relays_every_route_and_injects_nothing(
     assert response.status == 200
     assert hub.requests[-1]["authorization"] is None
     assert hub.requests[-1]["prefix"] == f"{PROXY_VIEW_URL}/{grant}"
+
+
+async def test_the_relay_injects_the_token_the_browser_never_received(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hub: FakeHub,
+    hass_client: ClientSessionGenerator,
+    hass_client_no_auth: ClientSessionGenerator,
+) -> None:
+    """The whole point of withholding it: nothing downstream needed it.
+
+    Mint the way a card does now — no `direct`, so the answer carries no token
+    — and then drive the two transports the embed actually uses through the
+    grant. Both reach the hub bearing the share token, injected server-side.
+    """
+    await _setup(hass, config_entry)
+    mock_client.mutate.reset_mock()
+    mock_client.mutate.return_value = minted()
+    user = await hass_client()
+
+    response = await user.post(
+        EMBED_TOKEN_VIEW_URL, json={"kind": "grid-view", "device_ids": [EXPORTED]}
+    )
+    payload = await response.json()
+    assert "token" not in payload
+    base = payload["proxy_base"]
+
+    browser = await hass_client_no_auth()
+    # HTTP: the tRPC query link. The browser sends no credential at all.
+    posted = await browser.post(
+        f"{base}/trpc/deviceManager.listAll",
+        data='{"json":null}',
+        headers={"Content-Type": "application/json"},
+    )
+    assert await posted.json() == {
+        "got": '{"json":null}',
+        "auth": "Bearer csv_deadbeef",
+    }
+
+    # WebSocket: the tRPC live link. The SDK's `connectionParams` carry no token
+    # either; the hub falls back to the header this upgrade request carries
+    # (`createWsTrpcContext` in the server backend).
+    async with browser.ws_connect(f"{base}/trpc") as ws:
+        await ws.send_str("hello")
+        msg = await ws.receive(timeout=5)
+    assert msg.data == "echo:hello:Bearer csv_deadbeef"

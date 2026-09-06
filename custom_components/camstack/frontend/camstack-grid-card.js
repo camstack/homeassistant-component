@@ -13,12 +13,23 @@
  * pass `urlFirst`), so a `<iframe src="…#t=…">` grid hangs for ten seconds and
  * then reports "config handshake timed out". A card must answer the handshake.
  *
- * ## Where the token comes from
+ * ## Where the token comes from — and when it does NOT come at all
  *
  * Not from here. The integration holds the hub's OAuth credential and mints a
  * short-lived, device-scoped `grid-view` share token on request
  * (`POST /api/camstack/embed_token`). This file never sees an account
  * credential and never stores the one it gets.
+ *
+ * On the RELAYED path it never sees the share token either. Home Assistant
+ * strips the browser's `Authorization` and injects that token server-side on
+ * every forwarded request (`proxy.py`), so a copy of it in this page would
+ * authenticate nothing and only widen the blast radius: a bearer credential
+ * sitting in a dashboard is copyable, and works against the hub from outside
+ * Home Assistant for the rest of its hour. So the mint is asked WITHOUT
+ * `direct`, the answer carries no token, and the embed is handed a RELATIVE
+ * `serverUrl` — which is how it knows the transport authenticates for it
+ * (`transport-auth.ts` in the viewer). Only a card with an explicit `url_base`
+ * frames the hub directly, and only that one asks for the credential.
  *
  * ## Where the frame points
  *
@@ -173,6 +184,9 @@ class CamstackGridCard extends HTMLElement {
     this._iframe = null;
     this._status = null;
     this._token = null;
+    /** True once a mint has ANSWERED for `_tokenKey`. The relayed path has no
+     *  token to test for freshness, so the grant's presence is the state. */
+    this._grantKnown = false;
     this._proxyBase = null;
     this._tokenExpiresAt = 0;
     this._tokenKey = null;
@@ -288,6 +302,7 @@ class CamstackGridCard extends HTMLElement {
   /** Drop the minted credential so the next render asks for a new one. */
   _forgetGrant() {
     this._token = null;
+    this._grantKnown = false;
     this._tokenKey = null;
     this._proxyBase = null;
     this._tokenExpiresAt = 0;
@@ -361,9 +376,16 @@ class CamstackGridCard extends HTMLElement {
     return explicit || this._resolvedBase || null;
   }
 
+  /** True when this card was told to frame the hub itself — the only case
+   *  where the browser still needs a share token of its own. Read from the
+   *  card's config alone, because the mint request has to carry it. */
+  _isDirect() {
+    return (this._config.url_base || "").trim() !== "";
+  }
+
   /** True when the frame goes through Home Assistant's relay, not to the hub. */
   _isRelayed() {
-    return !(this._config.url_base || "").trim() && this._proxyBase !== null;
+    return !this._isDirect() && this._proxyBase !== null;
   }
 
   /**
@@ -377,13 +399,30 @@ class CamstackGridCard extends HTMLElement {
     return this._baseUrl();
   }
 
+  /**
+   * The base the EMBED addresses the hub with — a same-origin PATH on the
+   * relayed route, never the absolute form the iframe `src` needs.
+   *
+   * The relative shape is the marker: the embed reads it as "a relay on your
+   * own origin authenticates for you" and sends no credential (see
+   * `transport-auth.ts`). Written absolute it would look like a direct hub
+   * address and the embed would insist on a token this page no longer has.
+   */
+  _serverUrl() {
+    return this._isRelayed() ? this._proxyBase : this._baseUrl();
+  }
+
   // ── the credential ───────────────────────────────────────────────────────
 
-  /** Resolves to `{ token, proxyBase }` — the credential and the relay path. */
+  /**
+   * Resolves to `{ token, proxyBase }` — the relay path, and the credential
+   * ONLY when this card frames the hub directly. `token` is null on the
+   * relayed path by design; `proxyBase` is what authorises the frame there.
+   */
   async _token_for(deviceIds) {
     const key = deviceIds.join(",");
     const fresh =
-      this._token !== null &&
+      this._grantKnown &&
       this._tokenKey === key &&
       (this._tokenExpiresAt === null ||
         this._tokenExpiresAt - Date.now() > TOKEN_RENEW_MARGIN_MS);
@@ -398,10 +437,14 @@ class CamstackGridCard extends HTMLElement {
       .callApi("POST", "camstack/embed_token", {
         kind: "grid-view",
         device_ids: deviceIds,
+        // Asked for ONLY by a card that frames the hub itself. Without it the
+        // answer carries no token — see the header.
+        ...(this._isDirect() ? { direct: true } : {}),
         ...(this._entryId ? { entry_id: this._entryId } : {}),
       })
       .then((result) => {
         this._token = (result && result.token) || null;
+        this._grantKnown = true;
         this._proxyBase =
           result && typeof result.proxy_base === "string" && result.proxy_base
             ? result.proxy_base
@@ -456,15 +499,18 @@ class CamstackGridCard extends HTMLElement {
       );
       return;
     }
-    const token = grant && grant.token;
     const base = this._frameBase();
-    if (!token || !base || !this._iframe) {
+    const serverUrl = this._serverUrl();
+    // A direct frame needs the credential; a relayed one needs the grant, and
+    // is broken without it in exactly the same way.
+    const usable = this._isDirect() ? Boolean(grant && grant.token) : this._isRelayed();
+    if (!usable || !base || !serverUrl || !this._iframe) {
       this._setStatus("CamStack did not issue a viewing token.");
       return;
     }
     const config = {
-      serverUrl: base,
-      token,
+      serverUrl,
+      ...(grant && grant.token ? { token: grant.token } : {}),
       devices: deviceIds,
       layout: this._layout(),
       quality: this._config.quality || "auto",
@@ -481,10 +527,12 @@ class CamstackGridCard extends HTMLElement {
       return;
     }
     this._sentConfigKey = key;
-    // Targeted at the hub's origin, never "*": this message carries the token.
+    // Targeted at one origin, never "*": on the direct path this message
+    // carries the token, and on the relayed path it still names the cameras
+    // this dashboard shows.
     this._iframe.contentWindow.postMessage(
       { type: "embed-config", config },
-      new URL(base).origin
+      new URL(base, window.location.origin).origin
     );
   }
 
@@ -562,7 +610,8 @@ class CamstackGridCard extends HTMLElement {
       );
       return;
     }
-    const base = grant && grant.token ? this._frameBase() : null;
+    const ready = this._isDirect() ? Boolean(grant && grant.token) : this._isRelayed();
+    const base = ready ? this._frameBase() : null;
     if (!base) {
       this._mountFrame(null, "CamStack did not issue a viewing token.");
       return;

@@ -2,8 +2,8 @@
  * CamStack events card for Lovelace.
  *
  * Frames the viewer's own events embed
- * (`<hub>/viewer/camstack/embed/index.html?mode=events&v=1&…#t=<token>`) — the
- * same reel the CamStack apps show.
+ * (`<base>/viewer/camstack/embed/index.html?mode=events&v=1&…`) — the same reel
+ * the CamStack apps show.
  *
  * ## Why this one is a URL and the grid card is a handshake
  *
@@ -12,9 +12,22 @@
  * does not, which is why its card has to answer `embed-ready` instead. Two
  * cards, two mechanisms, because the embed has two.
  *
- * The token rides the FRAGMENT deliberately: a fragment is never sent to the
- * server, so it does not land in the hub's access log, in a proxy log, or in a
- * Referer header.
+ * ## The token is no longer in this URL
+ *
+ * It used to ride the `#t=` fragment. A fragment is never sent to a server, so
+ * it stayed out of access logs and Referer headers — but it stayed in the
+ * BROWSER: in the address bar, in history, and in every screenshot of the
+ * dashboard. Anyone who could read it could use that bearer credential against
+ * the hub from outside Home Assistant for the rest of its hour.
+ *
+ * On the relayed path it bought nothing, because Home Assistant strips the
+ * browser's `Authorization` and injects the share token server-side on every
+ * forwarded request (`proxy.py`). So the mint is asked WITHOUT `direct`, the
+ * answer carries no token, and the frame URL carries no fragment: the embed
+ * reads the same-origin PATH it was served under as "the transport
+ * authenticates for you" (`transport-auth.ts` in the viewer). A card with an
+ * explicit `url_base` frames the hub directly, has no relay in front of it,
+ * and still gets `#t=` — the one case that needs it.
  *
  * ## A known gap: thumbnails
  *
@@ -136,6 +149,9 @@ class CamstackEventsCard extends HTMLElement {
     this._iframe = null;
     this._status = null;
     this._token = null;
+    /** True once a mint has ANSWERED for `_tokenKey`. The relayed path has no
+     *  token to test for freshness, so the grant's presence is the state. */
+    this._grantKnown = false;
     this._tokenExpiresAt = null;
     this._tokenKey = null;
     this._pendingToken = null;
@@ -220,6 +236,7 @@ class CamstackEventsCard extends HTMLElement {
   /** Drop the minted credential so the next render asks for a new one. */
   _forgetGrant() {
     this._token = null;
+    this._grantKnown = false;
     this._tokenKey = null;
     this._proxyBase = null;
     this._tokenExpiresAt = null;
@@ -275,9 +292,16 @@ class CamstackEventsCard extends HTMLElement {
     return explicit || this._resolvedBase || null;
   }
 
+  /** True when this card was told to frame the hub itself — the only case
+   *  where the browser still needs a share token of its own. Read from the
+   *  card's config alone, because the mint request has to carry it. */
+  _isDirect() {
+    return (this._config.url_base || "").trim() !== "";
+  }
+
   /** True when the frame goes through Home Assistant's relay, not to the hub. */
   _isRelayed() {
-    return !(this._config.url_base || "").trim() && this._proxyBase !== null;
+    return !this._isDirect() && this._proxyBase !== null;
   }
 
   /** The relay under Home Assistant's origin, or the hub when asked for it. */
@@ -343,15 +367,20 @@ class CamstackEventsCard extends HTMLElement {
     return parts.join(",");
   }
 
+  /**
+   * Resolves to `{ token, proxyBase }` — the relay path, and the credential
+   * ONLY when this card frames the hub directly. `token` is null on the
+   * relayed path by design; `proxyBase` is what authorises the frame there.
+   */
   async _token_for(deviceIds) {
     const key = deviceIds.join(",");
     const fresh =
-      this._token !== null &&
+      this._grantKnown &&
       this._tokenKey === key &&
       (this._tokenExpiresAt === null ||
         this._tokenExpiresAt - Date.now() > TOKEN_RENEW_MARGIN_MS);
     if (fresh) {
-      return this._token;
+      return { token: this._token, proxyBase: this._proxyBase };
     }
     if (this._pendingToken && this._tokenKey === key) {
       return this._pendingToken;
@@ -361,10 +390,14 @@ class CamstackEventsCard extends HTMLElement {
       .callApi("POST", "camstack/embed_token", {
         kind: "events-view",
         device_ids: deviceIds,
+        // Asked for ONLY by a card that frames the hub itself. Without it the
+        // answer carries no token — see the header.
+        ...(this._isDirect() ? { direct: true } : {}),
         ...(this._entryId ? { entry_id: this._entryId } : {}),
       })
       .then((result) => {
         this._token = (result && result.token) || null;
+        this._grantKnown = true;
         // The same-origin relay path the token is bound to (see the grid
         // card): a frame under it needs no certificate trust in the browser.
         this._proxyBase =
@@ -375,7 +408,7 @@ class CamstackEventsCard extends HTMLElement {
           result && typeof result.expires_at === "number"
             ? result.expires_at * 1000
             : null;
-        return this._token;
+        return { token: this._token, proxyBase: this._proxyBase };
       })
       .finally(() => {
         this._pendingToken = null;
@@ -470,9 +503,9 @@ class CamstackEventsCard extends HTMLElement {
       );
       return;
     }
-    let token;
+    let grant;
     try {
-      token = await this._token_for(deviceIds);
+      grant = await this._token_for(deviceIds);
     } catch (err) {
       this._buildCard(null);
       this._setStatus(
@@ -480,12 +513,18 @@ class CamstackEventsCard extends HTMLElement {
       );
       return;
     }
-    if (!token) {
+    // A direct frame needs the credential; a relayed one needs the grant, and
+    // is broken without it in exactly the same way.
+    const usable = this._isDirect() ? Boolean(grant && grant.token) : this._isRelayed();
+    if (!usable) {
       this._buildCard(null);
       this._setStatus("CamStack did not issue a viewing token.");
       return;
     }
-    const url = `${this._frameBase()}${EMBED_PATH}?${this._query(deviceIds)}#t=${token}`;
+    // No fragment on the relayed path: the credential is not this browser's to
+    // hold. See the header.
+    const fragment = this._isDirect() ? `#t=${grant.token}` : "";
+    const url = `${this._frameBase()}${EMBED_PATH}?${this._query(deviceIds)}${fragment}`;
     if (url === this._renderedUrl) {
       if (this._iframe) {
         this._iframe.style.cssText = this._frameStyle();

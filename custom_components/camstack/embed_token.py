@@ -22,6 +22,19 @@ Two guards live here rather than on the hub:
   on a busy instance — and minting per render would write a row into the hub's
   `share_view_tokens` table each time, forever.
 
+## Where the token goes
+
+To the browser only when the card frames the hub DIRECTLY (`url_base` set on
+the card). The default path is the relay in `proxy.py`, which strips the
+incoming `Authorization` and injects the share token server-side on every
+forwarded request — HTTP and the WebSocket upgrade alike. A second copy of that
+credential in the page authenticates nothing there and costs plenty: it used to
+sit in the events iframe's `#t=` fragment, i.e. in browser history and in every
+screenshot of the dashboard, and anyone who could read it could use it against
+the hub from outside Home Assistant for the rest of its hour. What the browser
+gets instead is the grant id — same-origin, revocable, dead when the token
+dies.
+
 The tokens are deliberately short-lived. `ttlSec: "never"` exists on the hub
 and is not used: a bearer credential that has left Home Assistant can only be
 taken back by expiring or by revocation, and nothing here would ever revoke.
@@ -164,6 +177,19 @@ class CamStackEmbedTokenView(HomeAssistantView):
                 400,
             )
 
+        # Does this card frame the hub DIRECTLY, or through the relay?
+        # The relayed path strips whatever `Authorization` the browser sends and
+        # injects the share token itself (see `proxy.py`), so the copy in the
+        # page authenticates nothing and only adds exposure: it used to ride the
+        # events iframe's `#t=` fragment into browser history, readable in any
+        # screenshot of the dashboard and usable against the hub from OUTSIDE
+        # Home Assistant for the rest of its hour. A card with an explicit
+        # `url_base` has no relay in front of it and still needs the credential,
+        # so it asks for it here — the only case that gets one.
+        direct = body.get("direct")
+        if direct is not None and not isinstance(direct, bool):
+            return self.json_message("direct must be a boolean", 400)
+
         entry_id = body.get("entry_id")
         if entry_id is None:
             entries = hass.config_entries.async_entries(DOMAIN)
@@ -186,7 +212,9 @@ class CamStackEmbedTokenView(HomeAssistantView):
                 f"CamStack does not export these devices as cameras: {unknown}", 400
             )
 
-        return await self._async_answer(hass, entry_id, kind, device_ids)
+        return await self._async_answer(
+            hass, entry_id, kind, device_ids, direct is True
+        )
 
     async def _async_answer(
         self,
@@ -194,6 +222,7 @@ class CamStackEmbedTokenView(HomeAssistantView):
         entry_id: str,
         kind: str,
         device_ids: list[int],
+        direct: bool,
     ) -> web.Response:
         """Return a cached token, or mint one and cache it."""
         cache = _cache(hass)
@@ -201,7 +230,7 @@ class CamStackEmbedTokenView(HomeAssistantView):
         now = dt_util.utcnow().timestamp()
         cached = cache.get(key)
         if cached is not None and cached.is_usable(now):
-            return self.json(_answer(hass, entry_id, key, cached))
+            return self.json(_answer(hass, entry_id, key, cached, direct))
 
         entry = hass.config_entries.async_get_entry(entry_id)
         client = getattr(getattr(entry, "runtime_data", None), "client", None)
@@ -225,7 +254,7 @@ class CamStackEmbedTokenView(HomeAssistantView):
         if minted is None:
             return self.json_message("the hub returned no share token", 502)
         cache[key] = minted
-        return self.json(_answer(hass, entry_id, key, minted))
+        return self.json(_answer(hass, entry_id, key, minted, direct))
 
 
 def _answer(
@@ -233,18 +262,26 @@ def _answer(
     entry_id: str,
     key: tuple[str, str, tuple[int, ...]],
     minted: MintedToken,
+    direct: bool,
 ) -> dict[str, Any]:
-    """Return the token, and the same-origin relay path bound to it.
+    """Return the same-origin relay path, and the token only if it is needed.
 
     The relay path is the card's `serverUrl`; its grant is stable per scope, so
     a re-mint changes the token behind the URL and never the URL.
+
+    The token itself is a bearer credential and it stays INSIDE Home Assistant
+    unless the caller says it frames the hub directly. On the relayed path the
+    grant is what authorises the browser: it only works from a Home Assistant
+    session, it is revocable, and it dies with the token. `expires_at` is
+    reported on both paths regardless — it is not a secret, and the card needs
+    it to know when to come back for a fresh grant.
     """
     scope_key = (key[0], key[1], *map(str, key[2]))
     grant_id = async_issue_grant(
         hass, entry_id, scope_key, minted.token, minted.expires_at
     )
     return {
-        "token": minted.token,
+        **({"token": minted.token} if direct else {}),
         "expires_at": minted.expires_at,
         "proxy_base": proxy_base_for(grant_id),
     }
