@@ -166,6 +166,7 @@ def proxy_base_for(grant_id: str) -> str:
 
 def is_relayed_path(path: str) -> bool:
     """Return whether the relay forwards `path` at all."""
+    # The WebSocket link is `/trpc` itself; every HTTP procedure is under it.
     if path == "trpc":
         return True
     return any(path.startswith(prefix) for prefix in PROXY_ALLOWED_PREFIXES)

@@ -82,7 +82,7 @@ PROXY_VIEW_URL: Final = "/api/camstack/p"
 # Assistant from being a relay to routes a future token might unlock.
 PROXY_ALLOWED_PREFIXES: Final = (
     "viewer/",
-    "trpc",
+    "trpc/",
     "addon/snapshot/media/",
     "addon/pipeline-analytics/event-media/",
 )

@@ -104,8 +104,12 @@ class FakeHub:
 
 
 @pytest.fixture
-async def hub(hass: HomeAssistant, config_entry: MockConfigEntry):
-    """Point the config entry at a fake hub for the life of one test."""
+async def hub(hass: HomeAssistant, config_entry: MockConfigEntry, socket_enabled: None):
+    """Point the config entry at a fake hub for the life of one test.
+
+    `socket_enabled`: the Home Assistant test plugin blocks sockets, and this
+    hub is a real listener on the loopback — the relay is asserted end to end.
+    """
     async with FakeHub() as fake:
         # Added here, once: an entry can be re-pointed only once it is known,
         # and adding it twice is refused. `_setup` below does the rest.
