@@ -48,6 +48,7 @@ from .const import (
     SHARE_TOKEN_RENEW_MARGIN,
     SHARE_TOKEN_TTL,
 )
+from .proxy import async_forget_entry_grants, async_issue_grant, proxy_base_for
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ def async_forget_entry_tokens(hass: HomeAssistant, entry_id: str) -> None:
     cache = _cache(hass)
     for key in [key for key in cache if key[0] == entry_id]:
         del cache[key]
+    async_forget_entry_grants(hass, entry_id)
 
 
 def parse_device_ids(raw: Any) -> list[int] | None:
@@ -199,7 +201,7 @@ class CamStackEmbedTokenView(HomeAssistantView):
         now = dt_util.utcnow().timestamp()
         cached = cache.get(key)
         if cached is not None and cached.is_usable(now):
-            return self.json({"token": cached.token, "expires_at": cached.expires_at})
+            return self.json(_answer(hass, entry_id, key, cached))
 
         entry = hass.config_entries.async_get_entry(entry_id)
         client = getattr(getattr(entry, "runtime_data", None), "client", None)
@@ -223,7 +225,29 @@ class CamStackEmbedTokenView(HomeAssistantView):
         if minted is None:
             return self.json_message("the hub returned no share token", 502)
         cache[key] = minted
-        return self.json({"token": minted.token, "expires_at": minted.expires_at})
+        return self.json(_answer(hass, entry_id, key, minted))
+
+
+def _answer(
+    hass: HomeAssistant,
+    entry_id: str,
+    key: tuple[str, str, tuple[int, ...]],
+    minted: MintedToken,
+) -> dict[str, Any]:
+    """Return the token, and the same-origin relay path bound to it.
+
+    The relay path is the card's `serverUrl`; its grant is stable per scope, so
+    a re-mint changes the token behind the URL and never the URL.
+    """
+    scope_key = (key[0], key[1], *map(str, key[2]))
+    grant_id = async_issue_grant(
+        hass, entry_id, scope_key, minted.token, minted.expires_at
+    )
+    return {
+        "token": minted.token,
+        "expires_at": minted.expires_at,
+        "proxy_base": proxy_base_for(grant_id),
+    }
 
 
 def _read_minted(result: Any) -> MintedToken | None:

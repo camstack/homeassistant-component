@@ -60,3 +60,19 @@ def test_the_probe_module_exports_what_the_cards_import() -> None:
     source = (ASSET_DIR / "camstack-hub-probe.js").read_text(encoding="utf-8")
     assert "export async function probeHub(" in source
     assert "export function buildUnreachableNotice(" in source
+
+
+@pytest.mark.parametrize("filename", CARD_FILENAMES)
+def test_every_card_frames_the_relay_and_probes_only_a_direct_hub(
+    filename: str,
+) -> None:
+    """The frame goes to the mint answer's `proxy_base`.
+
+    The certificate probe is for the operator who set `url_base` and framed
+    the hub directly.
+    """
+    source = (ASSET_DIR / filename).read_text(encoding="utf-8")
+    assert "result.proxy_base" in source, f"{filename}: ignores proxy_base"
+    assert "${window.location.origin}${this._proxyBase}" in source
+    assert "if (!this._isRelayed()) {" in source, f"{filename}: probes a relayed frame"
+    assert "this._frameBase()" in source

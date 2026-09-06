@@ -20,6 +20,17 @@
  * (`POST /api/camstack/embed_token`). This file never sees an account
  * credential and never stores the one it gets.
  *
+ * ## Where the frame points
+ *
+ * At Home Assistant, not at the hub. The mint answer carries `proxy_base`, a
+ * same-origin path under which Home Assistant relays the embed page, tRPC
+ * (HTTP and WebSocket) and the media routes to the hub with the token
+ * injected (`proxy.py`). A browser therefore never has to trust the hub's
+ * certificate — the reason a card was a white rectangle on every phone. The
+ * grant behind that path is stable per scope, so a re-minted token never
+ * changes the frame URL. An explicit `url_base` on the card bypasses the
+ * relay and frames the hub directly; only then is the certificate probed.
+ *
  * ## Why the iframe is rebuilt so rarely
  *
  * `set hass` fires several times a second on a busy instance. Rebuilding the
@@ -122,6 +133,7 @@ class CamstackGridCard extends HTMLElement {
     this._iframe = null;
     this._status = null;
     this._token = null;
+    this._proxyBase = null;
     this._tokenExpiresAt = 0;
     this._tokenKey = null;
     this._pendingToken = null;
@@ -234,8 +246,25 @@ class CamstackGridCard extends HTMLElement {
     return explicit || this._resolvedBase || null;
   }
 
+  /** True when the frame goes through Home Assistant's relay, not to the hub. */
+  _isRelayed() {
+    return !(this._config.url_base || "").trim() && this._proxyBase !== null;
+  }
+
+  /**
+   * The origin the frame and its `serverUrl` use: the relay under Home
+   * Assistant's own origin, or the hub itself when the operator asked for it.
+   */
+  _frameBase() {
+    if (this._isRelayed()) {
+      return `${window.location.origin}${this._proxyBase}`;
+    }
+    return this._baseUrl();
+  }
+
   // ── the credential ───────────────────────────────────────────────────────
 
+  /** Resolves to `{ token, proxyBase }` — the credential and the relay path. */
   async _token_for(deviceIds) {
     const key = deviceIds.join(",");
     const fresh =
@@ -244,7 +273,7 @@ class CamstackGridCard extends HTMLElement {
       (this._tokenExpiresAt === null ||
         this._tokenExpiresAt - Date.now() > TOKEN_RENEW_MARGIN_MS);
     if (fresh) {
-      return this._token;
+      return { token: this._token, proxyBase: this._proxyBase };
     }
     if (this._pendingToken && this._tokenKey === key) {
       return this._pendingToken;
@@ -258,11 +287,15 @@ class CamstackGridCard extends HTMLElement {
       })
       .then((result) => {
         this._token = (result && result.token) || null;
+        this._proxyBase =
+          result && typeof result.proxy_base === "string" && result.proxy_base
+            ? result.proxy_base
+            : null;
         this._tokenExpiresAt =
           result && typeof result.expires_at === "number"
             ? result.expires_at * 1000
             : null;
-        return this._token;
+        return { token: this._token, proxyBase: this._proxyBase };
       })
       .finally(() => {
         this._pendingToken = null;
@@ -295,21 +328,22 @@ class CamstackGridCard extends HTMLElement {
   }
 
   async _sendConfig() {
-    const base = this._baseUrl();
     const deviceIds = resolveDeviceIds(this._hass, this._config);
-    if (!base || !deviceIds.length || !this._iframe) {
+    if (!this._baseUrl() || !deviceIds.length || !this._iframe) {
       return;
     }
-    let token;
+    let grant;
     try {
-      token = await this._token_for(deviceIds);
+      grant = await this._token_for(deviceIds);
     } catch (err) {
       this._setStatus(
         `CamStack refused a viewing token: ${(err && err.message) || err}`
       );
       return;
     }
-    if (!token || !this._iframe) {
+    const token = grant && grant.token;
+    const base = this._frameBase();
+    if (!token || !base || !this._iframe) {
       this._setStatus("CamStack did not issue a viewing token.");
       return;
     }
@@ -375,32 +409,70 @@ class CamstackGridCard extends HTMLElement {
   }
 
   _render() {
-    const base = this._baseUrl();
     const deviceIds = this._hass
       ? resolveDeviceIds(this._hass, this._config)
       : [];
-    // Only the frame's OWN inputs are in the key. The device list travels over
-    // the open channel; putting it here would restart every stream on a rename.
-    const key = base ? `${base}${EMBED_PATH}?mode=grid` : null;
-
-    if (key !== this._renderedKey) {
-      this._renderedKey = key;
-      this._sentConfigKey = null;
-      this._buildCard(key);
+    if (!this._baseUrl() || !this._hass) {
+      this._mountFrame(
+        null,
+        this._resolving
+          ? "Waiting for the CamStack integration…"
+          : "No CamStack hub configured. Add the CamStack integration, or set url_base on this card."
+      );
+      return;
     }
-    if (this._iframe) {
-      this._iframe.style.cssText = this._frameStyle();
-    }
-    if (base && !deviceIds.length) {
-      this._setStatus(
+    if (!deviceIds.length) {
+      this._mountFrame(
+        null,
         "No CamStack cameras selected. Pick camera entities, or set device_ids."
       );
-    } else if (this._iframe) {
+      return;
+    }
+    this._ensureFrame(deviceIds);
+  }
+
+  /**
+   * The frame needs the grant before it can be pointed anywhere: the relay
+   * path comes with the token. Both are cached, so this is cheap on the
+   * re-render `set hass` fires several times a second.
+   */
+  async _ensureFrame(deviceIds) {
+    let grant;
+    try {
+      grant = await this._token_for(deviceIds);
+    } catch (err) {
+      this._mountFrame(
+        null,
+        `CamStack refused a viewing token: ${(err && err.message) || err}`
+      );
+      return;
+    }
+    const base = grant && grant.token ? this._frameBase() : null;
+    if (!base) {
+      this._mountFrame(null, "CamStack did not issue a viewing token.");
+      return;
+    }
+    // Only the frame's OWN inputs are in the key. The device list travels over
+    // the open channel; putting it here would restart every stream on a rename.
+    this._mountFrame(`${base}${EMBED_PATH}?mode=grid`, null);
+    if (this._iframe) {
+      this._iframe.style.cssText = this._frameStyle();
       this._sendConfig();
     }
   }
 
-  _buildCard(frameUrl) {
+  /** Rebuilds only when the frame URL — or the text shown in its place — changes. */
+  _mountFrame(frameUrl, emptyText) {
+    const key = frameUrl || `empty:${emptyText}`;
+    if (key === this._renderedKey) {
+      return;
+    }
+    this._renderedKey = key;
+    this._sentConfigKey = null;
+    this._buildCard(frameUrl, emptyText);
+  }
+
+  _buildCard(frameUrl, emptyText) {
     const card = document.createElement("ha-card");
     if (this._config.title) {
       card.setAttribute("header", this._config.title);
@@ -411,9 +483,7 @@ class CamstackGridCard extends HTMLElement {
     if (!frameUrl) {
       const empty = document.createElement("div");
       empty.style.cssText = "padding:16px;color:var(--secondary-text-color);";
-      empty.textContent = this._resolving
-        ? "Waiting for the CamStack integration…"
-        : "No CamStack hub configured. Add the CamStack integration, or set url_base on this card.";
+      empty.textContent = emptyText || "";
       wrapper.appendChild(empty);
       card.appendChild(wrapper);
       this.shadowRoot.replaceChildren(card);
@@ -438,7 +508,10 @@ class CamstackGridCard extends HTMLElement {
     this._iframe = iframe;
     this._status = status;
     this.shadowRoot.replaceChildren(card);
-    this._watchFrame(frameUrl, iframe);
+    if (!this._isRelayed()) {
+      // Framing the hub directly: only then can the browser refuse it.
+      this._watchFrame(frameUrl, iframe);
+    }
   }
 
   static getConfigElement() {

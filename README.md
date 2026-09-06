@@ -288,14 +288,21 @@ CamStack apps do.
 Both have a UI editor: add them from the dashboard's card picker ("CamStack
 Grid", "CamStack Events") and pick cameras with checkboxes.
 
-**A blank card means the browser refused the hub's certificate.** The hub
-serves HTTPS signed by its own local authority, and a browser that does not
-trust it blocks the frame silently — no error, no interstitial. The cards
-probe the hub and say so in the card, with a link: open the hub once in a new
-tab and accept the certificate, or install the CA certificate from the
-admin UI (Settings → Network) in the device's trust store. The Home Assistant
-apps offer no exception to click through, so on a phone the CA install is the
-way.
+**The cards frame the hub THROUGH Home Assistant.** The hub serves HTTPS
+signed by its own local authority, and a browser that does not trust it
+blocks an iframe silently — no error, no interstitial, and the Home Assistant
+apps offer no exception to click through. So the integration relays: the
+embed page, tRPC (HTTP and WebSocket) and the media routes are served under
+`/api/camstack/p/<grant>/…` on Home Assistant's own origin, with the card's
+device-scoped share token injected. Video itself is WebRTC between the
+browser and the hub and never crosses Home Assistant. The grant is handed out
+with the token to authenticated users only, dies with it, and reaches nothing
+the token cannot.
+
+Set `url_base` on a card to bypass the relay and frame the hub directly; the
+card then probes the hub and, if the browser refuses it, says so with the
+link to accept the certificate (or install the CA from the admin UI,
+Settings → Network).
 
 ### `camstack-grid-card` — a live wall
 

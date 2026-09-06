@@ -17,7 +17,6 @@ from aiohttp import web
 from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import KEY_HASS, HomeAssistantView, StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.start import async_at_started
 from homeassistant.loader import async_get_integration
@@ -27,7 +26,6 @@ from ..const import (
     CONF_PANEL_ENABLED,
     CONF_PANEL_ICON,
     CONF_PANEL_TITLE,
-    CONF_PANEL_URL,
     CONFIG_VIEW_URL,
     DEFAULT_PANEL_ENABLED,
     DEFAULT_PANEL_ICON,
@@ -39,6 +37,8 @@ from ..const import (
     STATIC_URL_PATH,
 )
 from ..embed_token import async_register_embed_token_view
+from ..hub_url import async_resolve_base_url
+from ..proxy import async_register_proxy_view
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,36 +56,12 @@ CARD_MODULE_URLS = tuple(f"{STATIC_URL_PATH}/{name}" for name in CARD_FILENAMES)
 CARD_MODULE_URL = CARD_MODULE_URLS[0]
 
 
-def async_resolve_base_url(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
-    """Return the hub URL the panel and the card should point at.
-
-    Derived from the connection the entry already holds. The `panel_url`
-    OPTION overrides it and is never asked for during setup: the migration
-    writes it so that upgrading does not silently move an operator's panel, and
-    an operator whose browser reaches the hub at a different address than Home
-    Assistant does can set it deliberately.
-    """
-    legacy = str(entry.options.get(CONF_PANEL_URL) or "").strip().rstrip("/")
-    if legacy:
-        if legacy.startswith("/"):
-            # A path-only URL was resolved against Home Assistant's own address
-            # by the component this one replaces. Keep doing that.
-            base = hass.config.internal_url or hass.config.external_url
-            return f"{base.rstrip('/')}{legacy}" if base else None
-        return legacy
-
-    host = str(entry.data.get(CONF_HOST) or "").strip()
-    port = entry.data.get(CONF_PORT)
-    if not host or not isinstance(port, int):
-        return None
-    return f"https://{host}:{port}"
-
-
 async def async_setup_frontend(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Serve the assets, register the panel, and offer the cards to Lovelace."""
     await _async_register_static_assets(hass)
     _async_register_config_view(hass)
     async_register_embed_token_view(hass)
+    async_register_proxy_view(hass)
     await _async_register_card_resources(hass, entry)
     await _async_register_panel(hass, entry)
 

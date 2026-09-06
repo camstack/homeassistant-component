@@ -72,6 +72,23 @@ VIEWER_EMBED_PATH: Final = "/viewer/camstack/embed/index.html"
 # the hub's OAuth token and never hands it to a browser: it mints a SHARE token
 # instead, scoped to a view kind and to an explicit list of device ids.
 EMBED_TOKEN_VIEW_URL: Final = "/api/camstack/embed_token"
+# The same-origin door to the hub for the cards' iframes: HTTP and WebSocket
+# relayed by Home Assistant under a per-grant secret path, so a browser never
+# has to trust the hub's certificate (the Scrypted integration's shape).
+PROXY_VIEW_URL: Final = "/api/camstack/p"
+# What a grant may reach on the hub, and nothing else: the embed page and its
+# assets, tRPC (HTTP and WebSocket), and the two media routes the embed draws
+# from. A share token cannot do more on the hub anyway; this keeps Home
+# Assistant from being a relay to routes a future token might unlock.
+PROXY_ALLOWED_PREFIXES: Final = (
+    "viewer/",
+    "trpc",
+    "addon/snapshot/media/",
+    "addon/pipeline-analytics/event-media/",
+)
+# A grant outlives its token by this much: a request racing the re-mint must
+# not fail on a token that was valid when the page composed it.
+PROXY_GRANT_GRACE: Final = timedelta(minutes=1)
 
 # The hub's minting mutation, and the two scope kinds it accepts.
 # `auth.createShareToken` -> `{ id, token, expiresAt }`.

@@ -85,6 +85,7 @@ class CamstackEventsCard extends HTMLElement {
     this._hass = null;
     this._resolvedBase = null;
     this._entryId = null;
+    this._proxyBase = null;
     this._probeToken = 0;
     this._cameras = [];
     this._resolving = false;
@@ -168,6 +169,19 @@ class CamstackEventsCard extends HTMLElement {
     return explicit || this._resolvedBase || null;
   }
 
+  /** True when the frame goes through Home Assistant's relay, not to the hub. */
+  _isRelayed() {
+    return !(this._config.url_base || "").trim() && this._proxyBase !== null;
+  }
+
+  /** The relay under Home Assistant's origin, or the hub when asked for it. */
+  _frameBase() {
+    if (this._isRelayed()) {
+      return `${window.location.origin}${this._proxyBase}`;
+    }
+    return this._baseUrl();
+  }
+
   /**
    * The devices this card reports on.
    *
@@ -245,6 +259,12 @@ class CamstackEventsCard extends HTMLElement {
       })
       .then((result) => {
         this._token = (result && result.token) || null;
+        // The same-origin relay path the token is bound to (see the grid
+        // card): a frame under it needs no certificate trust in the browser.
+        this._proxyBase =
+          result && typeof result.proxy_base === "string" && result.proxy_base
+            ? result.proxy_base
+            : null;
         this._tokenExpiresAt =
           result && typeof result.expires_at === "number"
             ? result.expires_at * 1000
@@ -359,7 +379,7 @@ class CamstackEventsCard extends HTMLElement {
       this._setStatus("CamStack did not issue a viewing token.");
       return;
     }
-    const url = `${base}${EMBED_PATH}?${this._query(deviceIds)}#t=${token}`;
+    const url = `${this._frameBase()}${EMBED_PATH}?${this._query(deviceIds)}#t=${token}`;
     if (url === this._renderedUrl) {
       if (this._iframe) {
         this._iframe.style.cssText = this._frameStyle();
@@ -397,7 +417,10 @@ class CamstackEventsCard extends HTMLElement {
       iframe.style.cssText = this._frameStyle();
       wrapper.appendChild(iframe);
       this._iframe = iframe;
-      this._watchFrame(url, iframe);
+      if (!this._isRelayed()) {
+        // Framing the hub directly: only then can the browser refuse it.
+        this._watchFrame(url, iframe);
+      }
     } else {
       const empty = document.createElement("div");
       empty.style.cssText = "padding:16px;color:var(--secondary-text-color);";
