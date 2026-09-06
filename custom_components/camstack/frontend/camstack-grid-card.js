@@ -50,6 +50,46 @@ const { probeHub, buildUnreachableNotice } = await import(
 /** The embed posts `embed-ready` within this, or the card says the player did not start. */
 const EMBED_READY_TIMEOUT_MS = 12000;
 
+/**
+ * Check a RELAYED frame before trusting it, and say what went wrong.
+ *
+ * The relay is same-origin with this page, so unlike a frame pointed at the
+ * hub its answer can simply be read. Three outcomes matter:
+ *
+ *  - `ok` — the hub answered; nothing to say.
+ *  - `stale-grant` (401/404) — Home Assistant restarted and forgot the grant
+ *    behind this URL, while this page kept the token it minted before the
+ *    restart. The card must FORGET that token and mint again; without this the
+ *    card is dead until someone reloads the browser.
+ *  - `unreachable` — the hub did not answer (it is restarting, or down). The
+ *    relay's own JSON would otherwise be painted into the card as raw text,
+ *    which is what an operator saw during a hub update.
+ */
+async function probeRelayedFrame(url, fetchImpl = fetch) {
+  try {
+    const response = await fetchImpl(url, { cache: "no-store", credentials: "same-origin" });
+    if (response.ok) {
+      return { state: "ok" };
+    }
+    if (response.status === 401 || response.status === 404) {
+      return { state: "stale-grant" };
+    }
+    let detail = `HTTP ${response.status}`;
+    try {
+      const body = await response.json();
+      if (body && typeof body.message === "string") detail = body.message;
+    } catch {
+      // A non-JSON body tells us nothing the status has not already said.
+    }
+    return { state: "unreachable", detail };
+  } catch (err) {
+    return { state: "unreachable", detail: (err && err.message) || String(err) };
+  }
+}
+
+/** Backoff for a hub that is coming back up: a restart takes tens of seconds. */
+const RELAY_RETRY_MS = [4000, 8000, 15000, 30000];
+
 const CARD_TAG = "camstack-grid-card";
 const EDITOR_TAG = "camstack-grid-card-editor";
 const EMBED_PATH = "/viewer/camstack/embed/index.html";
@@ -140,6 +180,9 @@ class CamstackGridCard extends HTMLElement {
     this._sentConfigKey = null;
     this._probeToken = 0;
     this._readyTimer = null;
+    this._retryTimer = null;
+    this._retryAttempt = 0;
+    this._grantRetried = false;
     this._embedReady = false;
     this._onMessage = this._onMessage.bind(this);
   }
@@ -151,6 +194,7 @@ class CamstackGridCard extends HTMLElement {
   disconnectedCallback() {
     window.removeEventListener("message", this._onMessage);
     this._clearReadyTimer();
+    this._clearRetryTimer();
     // Invalidates a probe still in flight, so a late answer cannot paint over
     // a card that has since been re-pointed or torn down.
     this._probeToken += 1;
@@ -169,19 +213,31 @@ class CamstackGridCard extends HTMLElement {
    * embed's `embed-ready`: a hub that is reachable but whose player never
    * comes up is reported instead of sitting blank.
    */
+  /**
+   * Watch a frame we just mounted.
+   *
+   * A DIRECT frame can only fail one way the page can see: the browser
+   * refusing the hub's certificate, which `probeHub` reports. A RELAYED
+   * frame is same-origin, so its failure can be read and acted on — a
+   * forgotten grant is re-minted, an unreachable hub is retried.
+   */
   _watchFrame(frameUrl, iframe) {
     const token = ++this._probeToken;
     const origin = new URL(frameUrl).origin;
     this._embedReady = false;
-    probeHub(origin).then((result) => {
-      if (token !== this._probeToken || result !== "unreachable") {
-        return;
-      }
-      this._clearReadyTimer();
-      iframe.replaceWith(buildUnreachableNotice(origin));
-      this._iframe = null;
-      this._setStatus(null);
-    });
+    if (this._isRelayed()) {
+      this._watchRelayed(frameUrl, iframe, token);
+    } else {
+      probeHub(origin).then((result) => {
+        if (token !== this._probeToken || result !== "unreachable") {
+          return;
+        }
+        this._clearReadyTimer();
+        iframe.replaceWith(buildUnreachableNotice(origin));
+        this._iframe = null;
+        this._setStatus(null);
+      });
+    }
     this._clearReadyTimer();
     this._readyTimer = setTimeout(() => {
       this._readyTimer = null;
@@ -194,6 +250,65 @@ class CamstackGridCard extends HTMLElement {
         );
       }
     }, EMBED_READY_TIMEOUT_MS);
+  }
+
+  _watchRelayed(frameUrl, iframe, token) {
+    probeRelayedFrame(frameUrl).then((result) => {
+      if (token !== this._probeToken || this._iframe !== iframe) {
+        return;
+      }
+      if (result.state === "ok") {
+        this._retryAttempt = 0;
+        this._grantRetried = false;
+        return;
+      }
+      this._clearReadyTimer();
+      if (result.state === "stale-grant") {
+        // The token this page holds names a grant Home Assistant no longer
+        // knows. Forget it and re-render: `_ensureFrame` mints a new one.
+        // ONE immediate attempt, then the ladder — a relay that answers 404
+        // forever (a card pointed at a removed entry) would otherwise mint a
+        // share token per animation frame. Measured: 950 mints in 6 s.
+        this._forgetGrant();
+        const immediate = !this._grantRetried;
+        this._grantRetried = true;
+        this._retryFrame(immediate ? 0 : this._nextRetryDelay());
+        return;
+      }
+      this._setStatus(`The CamStack hub did not answer: ${result.detail}. Retrying…`);
+      this._retryFrame(this._nextRetryDelay());
+    });
+  }
+
+  /** Next backoff step, saturating at the last rung. */
+  _nextRetryDelay() {
+    return RELAY_RETRY_MS[Math.min(this._retryAttempt++, RELAY_RETRY_MS.length - 1)];
+  }
+
+  /** Drop the minted credential so the next render asks for a new one. */
+  _forgetGrant() {
+    this._token = null;
+    this._tokenKey = null;
+    this._proxyBase = null;
+    this._tokenExpiresAt = 0;
+    this._renderedKey = null;
+    this._sentConfigKey = null;
+  }
+
+  _retryFrame(delayMs) {
+    this._clearRetryTimer();
+    this._retryTimer = setTimeout(() => {
+      this._retryTimer = null;
+      this._renderedKey = null;
+      this._render();
+    }, delayMs);
+  }
+
+  _clearRetryTimer() {
+    if (this._retryTimer !== null) {
+      clearTimeout(this._retryTimer);
+      this._retryTimer = null;
+    }
   }
 
   setConfig(config) {
@@ -508,10 +623,9 @@ class CamstackGridCard extends HTMLElement {
     this._iframe = iframe;
     this._status = status;
     this.shadowRoot.replaceChildren(card);
-    if (!this._isRelayed()) {
-      // Framing the hub directly: only then can the browser refuse it.
-      this._watchFrame(frameUrl, iframe);
-    }
+    // Always watched: `_watchFrame` picks the probe that fits the frame — the
+    // certificate probe for a direct hub, the readable answer for a relay.
+    this._watchFrame(frameUrl, iframe);
   }
 
   static getConfigElement() {

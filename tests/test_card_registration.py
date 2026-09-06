@@ -74,8 +74,31 @@ def test_every_card_frames_the_relay_and_probes_only_a_direct_hub(
     source = (ASSET_DIR / filename).read_text(encoding="utf-8")
     assert "result.proxy_base" in source, f"{filename}: ignores proxy_base"
     assert "${window.location.origin}${this._proxyBase}" in source
-    assert "if (!this._isRelayed()) {" in source, f"{filename}: probes a relayed frame"
+    assert "if (!this._isRelayed()) {" in source, f"{filename}: no direct-frame branch"
     assert "this._frameBase()" in source
+
+
+@pytest.mark.parametrize("filename", CARD_FILENAMES)
+def test_a_relayed_frame_is_read_back_re_minted_and_retried(filename: str) -> None:
+    """The relay is same-origin, so its failure is legible — and must be acted on.
+
+    A hub that is restarting answered the card with the relay's own JSON,
+    painted as raw text inside the dashboard (operator screenshot). And a Home
+    Assistant restart forgets every grant while the open page keeps the token
+    it minted, so the card would stay dead until someone reloaded the browser.
+    """
+    source = (ASSET_DIR / filename).read_text(encoding="utf-8")
+    assert "async function probeRelayedFrame(" in source
+    assert '"stale-grant"' in source, f"{filename}: a forgotten grant is not recognised"
+    assert "_forgetGrant()" in source, (
+        f"{filename}: a forgotten grant is never re-minted"
+    )
+    assert "RELAY_RETRY_MS" in source, (
+        f"{filename}: an unreachable hub is never retried"
+    )
+    assert "_clearRetryTimer()" in source, (
+        f"{filename}: the retry timer outlives the card"
+    )
 
 
 def test_the_panel_frames_the_relay_when_its_config_names_one() -> None:

@@ -248,8 +248,13 @@ class CamStackProxyView(HomeAssistantView):
             if _is_websocket(request):
                 return await _relay_websocket(request, session, url, headers)
             return await _relay_request(request, session, url, headers)
-        except aiohttp.ClientError as err:
-            _LOGGER.debug("relay to %s failed: %s", path, err)
+        except (aiohttp.ClientError, TimeoutError, OSError) as err:
+            # Warning, not debug: this 502 is painted INTO a dashboard card,
+            # and an operator who sees it deserves a line naming the hub and
+            # the reason. A hub restart produces a burst of these.
+            _LOGGER.warning(
+                "CamStack relay could not reach %s: %s", url, err or type(err).__name__
+            )
         return self.json_message("the hub did not answer", 502)
 
     get = _handle
