@@ -334,6 +334,31 @@ aspect_ratio: "16:9"
 | `active_only` | `false` | Only cameras currently active |
 | `url_base` | — | Override the hub address. Leave empty: the card asks the integration |
 
+#### What the tile buttons do
+
+Tap a tile and the player reveals its own controls. They are **host-driven**:
+the player changes nothing by itself, it tells the card what the operator asked
+for and renders what the card pushes back. This card answers:
+
+| The tile asks | The card does |
+| --- | --- |
+| audio on/off | Adds or removes that camera from the audible set. Audio is combinable — several cameras at once — and the set survives every re-render of the dashboard |
+| pause / play | Adds or removes that camera from the paused set |
+| open (and a tap, and a long press) | Opens that camera's **more-info** dialog, the same one every other Home Assistant camera card opens |
+
+Three of the player's buttons have no answer here and never appear: **PTZ**
+(this card declares no PTZ-capable camera, because a dashboard has nowhere to
+mount those controls — CamStack exposes PTZ as entity services instead), and the
+**linked devices** / **view options** panels (both are the CamStack app's own
+components; the linked devices are Home Assistant entities you place on the
+dashboard yourself, and the view options *are* this card's config, edited in the
+card editor). The **remove** and **resize** grips are not drawn either: the
+wall's membership and shape are the Lovelace config, which a rendered card
+cannot write.
+
+A card configured with `device_ids` instead of `entities` has no entity to open,
+and says so in the card rather than opening something arbitrary.
+
 ### `camstack-events-card` — the detections reel
 
 ```yaml
@@ -472,6 +497,19 @@ The test fixtures are verbatim payloads recorded from a live hub, not shapes
 invented to match this code. CI runs the suite against **two** Home Assistant
 generations — the Python version is what selects them — plus hassfest, HACS
 validation and ruff.
+
+The cards are plain ES modules, so most of what protects them is a grep over
+their source. One test actually runs one: `tests/browser/grid-card-host.spec.cjs`
+mounts the grid card in Chromium against a fake `hass` and a stub that speaks
+the embed's half of the protocol, and checks that a tile button produces the
+right command and that a re-render storm does not rebuild the iframe. Playwright
+is not a dependency of this repo — it is borrowed from the CamStack server
+checkout next door, and the test is not in CI:
+
+```bash
+NODE_PATH=../camstack-server/node_modules node tests/browser/grid-card-host.spec.cjs
+BREAK_FIX=1 NODE_PATH=… node tests/browser/grid-card-host.spec.cjs   # counter-proof: must fail
+```
 
 ### Versioning
 

@@ -48,6 +48,31 @@
  * iframe restarts every WebRTC session on the wall, so the frame is recreated
  * only when the composed URL changes; a changed device list or layout is sent
  * over the open channel instead.
+ *
+ * ## Why this card has to answer the tiles
+ *
+ * The embed is HOST-DRIVEN: an in-tile button changes nothing by itself. It
+ * posts an intent — `audioToggle`, `pauseToggle`, `tileOpen` — and waits for
+ * the host to push the resulting state back over the same channel
+ * (`setAudioOn`, `setPaused`, …). That is deliberate on the viewer's side: the
+ * audio and pause SETS belong to the host so its own chrome can reflect them,
+ * and a page that flipped them locally would disagree with the host the moment
+ * anything re-pushed them. The full vocabulary is
+ * `camstack/embed/src/embed/grid-messages.ts` (out) and the `onHostCommand`
+ * switch in `pages/EmbedGridPage.tsx` (in).
+ *
+ * Until 2026-09-06 this card read `embed-ready` and `state` and dropped the
+ * rest, which is why an operator reported cards that render perfectly and
+ * "buttons that do nothing". Every tile intent landed in a handler that had no
+ * case for it. `_onMessage` now names EVERY type in the contract: the ones this
+ * surface can answer, and the ones a Lovelace dashboard has no honest answer
+ * for — spelled out, with the reason, rather than left to fall through.
+ *
+ * The host-owned sets live on the element (`_audioOnIds`, `_pausedIds`), not in
+ * the config or a per-render closure: `set hass` would otherwise un-mute a tile
+ * the operator just muted. They seed a fresh embed's config and are re-pushed
+ * whenever the page reports `ready` again, because a reconnect remounts it with
+ * a seed that is stale by exactly the toggles made since.
  */
 /**
  * The probe lives in a sibling module. `import.meta.url` carries the `?v=`
@@ -121,6 +146,26 @@ function deviceIdOf(hass, entityId) {
   const state = hass && hass.states && hass.states[entityId];
   const raw = state && state.attributes && state.attributes.camstack_device_id;
   return Number.isInteger(raw) ? raw : null;
+}
+
+/**
+ * The camera entity a hub device id came back as — the reverse of `deviceIdOf`.
+ *
+ * Only the entities the card was configured with are searched: a dashboard may
+ * show four cameras out of forty, and a tile intent must not open a camera this
+ * card does not display. A card configured with raw `device_ids` has no entity
+ * to find, and the caller says so rather than opening something arbitrary.
+ */
+function entityForDevice(hass, config, deviceId) {
+  if (!Array.isArray(config.entities)) {
+    return null;
+  }
+  for (const entityId of config.entities) {
+    if (deviceIdOf(hass, entityId) === deviceId) {
+      return entityId;
+    }
+  }
+  return null;
 }
 
 function friendlyName(hass, entityId) {
@@ -203,6 +248,17 @@ class CamstackGridCard extends HTMLElement {
     this._retryAttempt = 0;
     this._grantRetried = false;
     this._embedReady = false;
+    /**
+     * The host-owned tile state. The embed holds no opinion of its own about
+     * either: its buttons post an intent and render what comes back.
+     *
+     * On the ELEMENT, deliberately. `set hass` re-enters `_render` several
+     * times a second and a set rebuilt there would silence a tile the operator
+     * unmuted a frame earlier — and re-seeding it through the config would mean
+     * rebuilding the iframe, which restarts every WebRTC session on the wall.
+     */
+    this._audioOnIds = new Set();
+    this._pausedIds = new Set();
     this._onMessage = this._onMessage.bind(this);
   }
 
@@ -518,11 +574,159 @@ class CamstackGridCard extends HTMLElement {
       this._sendConfig();
       return;
     }
-    if (data.type === "state" && data.state === "error") {
-      this._setStatus(data.message || "The CamStack embed reported an error.");
-    } else if (data.type === "state" && data.state === "ready") {
-      this._setStatus(null);
+    switch (data.type) {
+      case "state":
+        if (data.state === "error") {
+          this._setStatus(data.message || "The CamStack embed reported an error.");
+        } else if (data.state === "ready") {
+          this._setStatus(null);
+          // The page has (re)mounted. It seeded itself from the config we sent,
+          // which is stale by every toggle made since — and after a reconnect
+          // that config may be the one from before the operator muted a tile.
+          this._republishHostState();
+        }
+        return;
+
+      // ── the tile intents this dashboard can answer ───────────────────────
+      case "tileTap":
+      case "tileLongPress":
+      case "tileOpen":
+        // "Show me this camera, bigger." Home Assistant's answer to that is the
+        // entity's more-info dialog: it is the surface every other camera card
+        // opens, it is already themed and translated, and it carries the
+        // camera's own controls. The rect `tileTap`/`tileLongPress` bring is for
+        // a native host anchoring an overlay on top of the WebView; a dashboard
+        // has no such overlay, so only the device id is used.
+        this._openCamera(data.deviceId);
+        return;
+      case "audioToggle":
+        // Audio is a COMBINABLE, host-owned SET (more than one camera may be
+        // audible). The button states an intent; we flip our set and push the
+        // whole thing back, which is the only thing the embed accepts.
+        this._toggleHostSet(this._audioOnIds, data.deviceId, "setAudioOn");
+        return;
+      case "pauseToggle":
+        this._toggleHostSet(this._pausedIds, data.deviceId, "setPaused");
+        return;
+
+      // ── the intents a Lovelace card has no honest answer for ─────────────
+      //
+      // Ignored, and named here rather than left to fall through: a reader has
+      // to be able to tell "we decided not to" from "nobody noticed".
+      case "ptzOpen":
+        // The PTZ button is drawn only for cameras the host declared in
+        // `ptzIds`, and this card declares none — because the controls
+        // themselves are the app's own component and a dashboard has nowhere to
+        // mount them. Home Assistant exposes CamStack PTZ as entity services,
+        // not as a surface a card can open. So the button never appears; if a
+        // future embed posts this anyway, doing nothing is the honest answer.
+        return;
+      case "cellPanelOpen":
+        // 'devices' / 'viewOptions' / 'actions' are the viewer app's own
+        // panels, shared with its single-camera view. None of them exist here:
+        // the linked-device actions are Home Assistant entities the operator
+        // puts on the dashboard themselves, and the view options ARE this
+        // card's config, which is edited in the card editor. Faking a panel
+        // that half-works would be worse than the button doing nothing, and the
+        // camera itself is one tap away through more-info.
+        return;
+
+      // ── configuration edits, which a rendered card does not own ──────────
+      //
+      // `tileRemove` / `tileResize` are only drawn when the host declared the
+      // wall `editable`, and this card never does: its membership and shape are
+      // the Lovelace config, and a rendered card cannot write that (only the
+      // config element can, and it has no frame). Acting on them would edit a
+      // dashboard nobody asked to edit — and then lose the edit on the next
+      // reload, because it was never saved.
+      case "tileRemove":
+      case "tileResize":
+        return;
+      case "layout":
+        // Tile rects, reported so a NATIVE host can anchor its own chrome over
+        // the WebView pixel-perfectly. This card draws no chrome over the frame
+        // — the embed draws its own — so the measurements have no consumer.
+        return;
+      default:
+        return;
     }
+  }
+
+  /**
+   * Flip one device in a host-owned set and push the whole set to the embed.
+   *
+   * Sets, not per-device deltas: `setAudioOn` / `setPaused` REPLACE the set on
+   * the page (see `EmbedGridPage`), which is what keeps host and page from
+   * drifting apart over a dropped message.
+   */
+  _toggleHostSet(set, deviceId, command) {
+    if (!Number.isInteger(deviceId)) {
+      return;
+    }
+    if (set.has(deviceId)) {
+      set.delete(deviceId);
+    } else {
+      set.add(deviceId);
+    }
+    this._postCommand(command, [...set]);
+  }
+
+  /** Re-push everything the host owns, after the page has come back up. */
+  _republishHostState() {
+    this._postCommand("setAudioOn", [...this._audioOnIds]);
+    this._postCommand("setPaused", [...this._pausedIds]);
+  }
+
+  /**
+   * Send one host→page command.
+   *
+   * The envelope is the embed's, not ours: `onHostCommand` in `host-bridge.ts`
+   * reads `{ type: "embed-command", command: { kind, value } }` and drops
+   * anything else. Targeted at the frame's origin — never `'*'`: the value
+   * names cameras this dashboard shows and drives the wall's state.
+   */
+  _postCommand(kind, value) {
+    const base = this._frameBase();
+    if (!this._iframe || !this._iframe.contentWindow || !base) {
+      return;
+    }
+    this._iframe.contentWindow.postMessage(
+      { type: "embed-command", command: { kind, value } },
+      new URL(base, window.location.origin).origin
+    );
+  }
+
+  /**
+   * Open the camera behind a tile, in the dialog Home Assistant already has.
+   *
+   * `hass-more-info` is the event every core card fires for this; the frontend
+   * mounts the dialog. A card configured with raw `device_ids` has no entity to
+   * name, and rather than opening the wrong thing (or nothing, silently) it
+   * says so where the operator is already looking — the card's own status line.
+   */
+  _openCamera(deviceId) {
+    if (!Number.isInteger(deviceId)) {
+      return;
+    }
+    const entityId = this._entityForDevice(deviceId);
+    if (!entityId) {
+      this._setStatus(
+        "This tile has no Home Assistant camera entity to open. " +
+          "Configure the card with camera entities instead of device_ids."
+      );
+      return;
+    }
+    this.dispatchEvent(
+      new CustomEvent("hass-more-info", {
+        detail: { entityId },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  _entityForDevice(deviceId) {
+    return entityForDevice(this._hass, this._config, deviceId);
   }
 
   async _sendConfig() {
@@ -548,6 +752,9 @@ class CamstackGridCard extends HTMLElement {
       this._setStatus("CamStack did not issue a viewing token.");
       return;
     }
+    // A camera that left the wall takes its host-owned state with it, or the
+    // set would silently re-mute it if it ever came back.
+    this._pruneHostState(deviceIds);
     const config = {
       serverUrl,
       ...(grant && grant.token ? { token: grant.token } : {}),
@@ -558,6 +765,11 @@ class CamstackGridCard extends HTMLElement {
       showBadges: this._config.show_badges !== false,
       muted: this._config.muted !== false,
       paused: false,
+      // The seed for a page that is mounting now. It matters after a frame
+      // rebuild or a reconnect: without it the wall would come back with every
+      // tile audible-by-default and every pause forgotten.
+      audioOnIds: [...this._audioOnIds],
+      pausedIds: [...this._pausedIds],
       labels: resolveLabels(this._hass, this._config),
       ...(this._config.active_only === true ? { activeOnly: true } : {}),
       ...(this._config.show_boxes === true ? { showBoxes: true } : {}),
@@ -574,6 +786,17 @@ class CamstackGridCard extends HTMLElement {
       { type: "embed-config", config },
       new URL(base, window.location.origin).origin
     );
+  }
+
+  /** Drop host-owned state for cameras no longer on the wall. */
+  _pruneHostState(deviceIds) {
+    for (const set of [this._audioOnIds, this._pausedIds]) {
+      for (const id of [...set]) {
+        if (!deviceIds.includes(id)) {
+          set.delete(id);
+        }
+      }
+    }
   }
 
   _layout() {
