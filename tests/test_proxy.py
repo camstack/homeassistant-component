@@ -14,13 +14,13 @@ import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
-from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
 
 from custom_components.camstack.const import (
+    CONF_PANEL_URL,
     EMBED_TOKEN_VIEW_URL,
     PROXY_GRANT_GRACE,
     PROXY_VIEW_URL,
@@ -114,13 +114,10 @@ async def hub(hass: HomeAssistant, config_entry: MockConfigEntry, socket_enabled
         # Added here, once: an entry can be re-pointed only once it is known,
         # and adding it twice is refused. `_setup` below does the rest.
         config_entry.add_to_hass(hass)
+        # The entry's host/port always mean HTTPS; the `panel_url` option is
+        # the documented way to name the hub's address verbatim.
         hass.config_entries.async_update_entry(
-            config_entry,
-            data={
-                **config_entry.data,
-                CONF_HOST: fake.server.host,
-                CONF_PORT: fake.server.port,
-            },
+            config_entry, options={**config_entry.options, CONF_PANEL_URL: fake.base}
         )
         yield fake
 
