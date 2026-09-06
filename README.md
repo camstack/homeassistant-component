@@ -299,6 +299,10 @@ browser and the hub and never crosses Home Assistant. The grant is handed out
 with the token to authenticated users only, dies with it, and reaches nothing
 the token cannot.
 
+The sidebar panel goes through the same relay once the hub's admin UI can
+live under a path prefix (it answers its index under `X-Forwarded-Prefix`
+with a `camstack-mount` marker); an older hub keeps being framed directly.
+
 Set `url_base` on a card to bypass the relay and frame the hub directly; the
 card then probes the hub and, if the browser refuses it, says so with the
 link to accept the certificate (or install the CA from the admin UI,

@@ -76,3 +76,9 @@ def test_every_card_frames_the_relay_and_probes_only_a_direct_hub(
     assert "${window.location.origin}${this._proxyBase}" in source
     assert "if (!this._isRelayed()) {" in source, f"{filename}: probes a relayed frame"
     assert "this._frameBase()" in source
+
+
+def test_the_panel_frames_the_relay_when_its_config_names_one() -> None:
+    source = (ASSET_DIR / "camstack-panel.js").read_text(encoding="utf-8")
+    assert "config.proxy_base" in source
+    assert "_renderRelayedFrame(`${window.location.origin}${proxyBase}/`)" in source

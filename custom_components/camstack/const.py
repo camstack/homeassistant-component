@@ -86,6 +86,12 @@ PROXY_ALLOWED_PREFIXES: Final = (
     "addon/snapshot/media/",
     "addon/pipeline-analytics/event-media/",
 )
+# The panel is relayed only when the hub honours `X-Forwarded-Prefix`: its
+# index, asked for under a probe prefix, carries this marker.
+MOUNT_MARKER: Final = 'name="camstack-mount"'
+MOUNT_PROBE_PREFIX: Final = "/camstack-mount-probe"
+MOUNT_PROBE_TIMEOUT: Final = timedelta(seconds=5)
+MOUNT_PROBE_READ_BYTES: Final = 16_384
 # A grant outlives its token by this much: a request racing the re-mint must
 # not fail on a token that was valid when the page composed it.
 PROXY_GRANT_GRACE: Final = timedelta(minutes=1)

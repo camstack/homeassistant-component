@@ -76,6 +76,21 @@ def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
     return
 
 
+@pytest.fixture(autouse=True)
+def no_mount_probe() -> Generator[AsyncMock]:
+    """Keep the panel's mount probe off the network.
+
+    Registering the panel asks the hub whether it honours a forwarded prefix.
+    The test plugin blocks sockets, so every test gets "no" unless it sets the
+    mock's return value itself.
+    """
+    with patch(
+        "custom_components.camstack.frontend.async_probe_mount_support",
+        new=AsyncMock(return_value=False),
+    ) as probe:
+        yield probe
+
+
 # --- Recorded hub payloads -------------------------------------------------
 
 DEVICE_CAMERA: dict[str, Any] = {

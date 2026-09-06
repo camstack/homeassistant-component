@@ -94,6 +94,14 @@ class CamstackPanel extends HTMLElement {
   set config(config) {
     this._config = config;
     const url = config && config.url;
+    const proxyBase = config && config.proxy_base;
+    if (proxyBase) {
+      // Framed THROUGH Home Assistant (`proxy.py`): same origin as this page,
+      // so there is no certificate for the browser to refuse and nothing to
+      // probe. The hub answers its index under the prefix (`camstack-mount`).
+      this._renderRelayedFrame(`${window.location.origin}${proxyBase}/`);
+      return;
+    }
     if (!url) {
       // The integration refuses to register a panel without a URL, so this can
       // only be a stale registration. Say so rather than showing a blank page.
@@ -159,6 +167,21 @@ class CamstackPanel extends HTMLElement {
 
     box.append(title, detail, link, durable);
     return box;
+  }
+
+  _renderRelayedFrame(url) {
+    this._clearTimeout();
+    this._probeToken += 1;
+    const container = document.createElement("div");
+    container.style.cssText =
+      "position:relative;width:100%;height:100%;background:var(--primary-background-color,#0a0a0a);";
+    const iframe = document.createElement("iframe");
+    iframe.src = url;
+    iframe.allow = "autoplay; fullscreen; microphone";
+    iframe.style.cssText =
+      "position:absolute;inset:0;width:100%;height:100%;border:none;";
+    container.appendChild(iframe);
+    this.shadowRoot.replaceChildren(container);
   }
 
   _renderFrame(url) {

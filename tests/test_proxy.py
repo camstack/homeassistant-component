@@ -29,6 +29,7 @@ from custom_components.camstack.proxy import (
     ProxyGrant,
     async_forget_entry_grants,
     async_issue_grant,
+    async_issue_panel_grant,
     is_relayed_path,
 )
 
@@ -73,6 +74,7 @@ class FakeHub:
                 "path": request.path,
                 "query": dict(request.query),
                 "authorization": request.headers.get("Authorization"),
+                "prefix": request.headers.get("X-Forwarded-Prefix"),
                 "cookie": request.headers.get("Cookie"),
                 "method": request.method,
             }
@@ -163,6 +165,7 @@ async def test_the_relay_forwards_the_embed_page_with_the_grant_token_and_no_ha_
             "path": "/viewer/camstack/embed/index.html",
             "query": {"mode": "grid"},
             "authorization": "Bearer csv_x",
+            "prefix": f"{PROXY_VIEW_URL}/{grant}",
             "cookie": None,
             "method": "GET",
         }
@@ -319,3 +322,23 @@ async def test_the_mint_answer_carries_the_relay_path_bound_to_the_token(
     )
     assert relayed.status == 200
     assert hub.requests[-1]["authorization"] == "Bearer csv_deadbeef"
+
+
+async def test_the_panels_grant_relays_every_route_and_injects_nothing(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hub: FakeHub,
+    hass_client_no_auth: ClientSessionGenerator,
+) -> None:
+    """The admin UI signs in on its own; the relay only tells it where it is."""
+    await _setup(hass, config_entry)
+    grant = async_issue_panel_grant(hass, config_entry.entry_id)
+    assert async_issue_panel_grant(hass, config_entry.entry_id) == grant
+    client = await hass_client_no_auth()
+
+    response = await client.get(f"{PROXY_VIEW_URL}/{grant}/secret/admin")
+
+    assert response.status == 200
+    assert hub.requests[-1]["authorization"] is None
+    assert hub.requests[-1]["prefix"] == f"{PROXY_VIEW_URL}/{grant}"

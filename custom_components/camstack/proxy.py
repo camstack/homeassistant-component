@@ -24,6 +24,16 @@ The grant id is STABLE across re-mints of the same scope, so the iframe's
 URL never changes when the token rotates: rebuilding the frame restarts every
 WebRTC session on the wall.
 
+## The panel's grant
+
+The sidebar panel frames the WHOLE admin UI, which has its own login, so its
+grant injects nothing and relays every path: reaching it is reaching the
+hub's login page, no more. It is stable per entry, never expires, and is
+handed out only inside the panel's config — which the frontend delivers to
+signed-in users. The hub learns where it is mounted from
+`X-Forwarded-Prefix`, sent on every relayed request, and answers its index
+with a `<base>` under that prefix (the contract the admin UI implements).
+
 ## What the relay does not carry
 
 Video. Live, recorded playback and scrub are one WebRTC session between the
@@ -98,14 +108,23 @@ _RESPONSE_HEADERS_DROPPED = frozenset(
 )
 
 
+# A grant for a card's embed: the embed's own routes, the share token injected.
+GRANT_EMBED = "embed"
+# A grant for the sidebar panel: every route, nothing injected — the admin UI
+# signs in on its own.
+GRANT_PANEL = "panel"
+
+
 @dataclass(frozen=True, slots=True)
 class ProxyGrant:
     """What one grant id stands for: an entry, and the token relayed under it."""
 
     entry_id: str
-    token: str
-    #: Epoch seconds, or None for a token that never expires.
+    #: The share token injected on every relayed request; None for the panel.
+    token: str | None
+    #: Epoch seconds, or None for a grant that never expires.
     expires_at: float | None
+    kind: str = GRANT_EMBED
 
     def is_live(self, now: float) -> bool:
         """Return whether requests under this grant are still relayed."""
@@ -141,6 +160,19 @@ def async_issue_grant(
         grant_id = secrets.token_urlsafe(32)
         ids[scope_key] = grant_id
     _grants(hass)[grant_id] = ProxyGrant(entry_id, token, expires_at)
+    return grant_id
+
+
+@callback
+def async_issue_panel_grant(hass: HomeAssistant, entry_id: str) -> str:
+    """Return the entry's one panel grant, creating it on first use."""
+    ids = _grant_ids(hass)
+    scope_key = (entry_id, GRANT_PANEL)
+    grant_id = ids.get(scope_key)
+    if grant_id is None:
+        grant_id = secrets.token_urlsafe(32)
+        ids[scope_key] = grant_id
+    _grants(hass)[grant_id] = ProxyGrant(entry_id, None, None, GRANT_PANEL)
     return grant_id
 
 
@@ -198,7 +230,7 @@ class CamStackProxyView(HomeAssistantView):
             # Unknown and expired look the same on purpose: a guess must not
             # learn whether an id once existed.
             return self.json_message("unknown grant", 404)
-        if not is_relayed_path(path):
+        if record.kind == GRANT_EMBED and not is_relayed_path(path):
             return self.json_message("not relayed", 404)
 
         entry = hass.config_entries.async_get_entry(record.entry_id)
@@ -210,7 +242,7 @@ class CamStackProxyView(HomeAssistantView):
         url = f"{base.rstrip('/')}/{path}"
         if request.query_string:
             url = f"{url}?{request.query_string}"
-        headers = _forward_headers(request, record.token)
+        headers = _forward_headers(request, record.token, proxy_base_for(grant))
 
         try:
             if _is_websocket(request):
@@ -227,7 +259,9 @@ class CamStackProxyView(HomeAssistantView):
     patch = _handle
 
 
-def _forward_headers(request: web.Request, token: str) -> dict[str, str]:
+def _forward_headers(
+    request: web.Request, token: str | None, prefix: str
+) -> dict[str, str]:
     """Return the request headers the hub gets.
 
     The browser's, minus hop-by-hop and Home Assistant's own, plus the
@@ -238,7 +272,11 @@ def _forward_headers(request: web.Request, token: str) -> dict[str, str]:
         for name, value in request.headers.items()
         if name not in _REQUEST_HEADERS_DROPPED
     }
-    headers[hdrs.AUTHORIZATION] = f"Bearer {token}"
+    if token is not None:
+        headers[hdrs.AUTHORIZATION] = f"Bearer {token}"
+    # Where the hub is mounted, seen from the browser: the admin UI's index
+    # answers with a `<base>` under it (the panel's contract).
+    headers["X-Forwarded-Prefix"] = prefix
     headers[hdrs.X_FORWARDED_HOST] = request.headers.get(
         hdrs.X_FORWARDED_HOST, request.host
     )

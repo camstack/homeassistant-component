@@ -13,11 +13,12 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from aiohttp import web
+from aiohttp import ClientError, ClientTimeout, web
 from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import KEY_HASS, HomeAssistantView, StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.start import async_at_started
 from homeassistant.loader import async_get_integration
 
@@ -26,11 +27,17 @@ from ..const import (
     CONF_PANEL_ENABLED,
     CONF_PANEL_ICON,
     CONF_PANEL_TITLE,
+    CONF_VERIFY_SSL,
     CONFIG_VIEW_URL,
     DEFAULT_PANEL_ENABLED,
     DEFAULT_PANEL_ICON,
     DEFAULT_PANEL_TITLE,
+    DEFAULT_VERIFY_SSL,
     DOMAIN,
+    MOUNT_MARKER,
+    MOUNT_PROBE_PREFIX,
+    MOUNT_PROBE_READ_BYTES,
+    MOUNT_PROBE_TIMEOUT,
     PANEL_COMPONENT_NAME,
     PANEL_FILENAME,
     PANEL_URL_PATH,
@@ -38,7 +45,11 @@ from ..const import (
 )
 from ..embed_token import async_register_embed_token_view
 from ..hub_url import async_resolve_base_url
-from ..proxy import async_register_proxy_view
+from ..proxy import (
+    async_issue_panel_grant,
+    async_register_proxy_view,
+    proxy_base_for,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -118,9 +129,50 @@ async def _async_register_panel(hass: HomeAssistant, entry: ConfigEntry) -> None
         module_url=PANEL_MODULE_URL,
         embed_iframe=True,
         require_admin=False,
-        config={"url": url, "entry_id": entry.entry_id},
+        config={
+            "url": url,
+            "entry_id": entry.entry_id,
+            **(await _async_panel_relay_config(hass, entry, url)),
+        },
     )
     _LOGGER.debug("CamStack sidebar panel now points at %s", url)
+
+
+async def _async_panel_relay_config(
+    hass: HomeAssistant, entry: ConfigEntry, url: str
+) -> dict[str, str]:
+    """Return `{"proxy_base": …}` when the hub can be framed through the relay.
+
+    Only a hub that answers its index under a forwarded prefix with the
+    `camstack-mount` marker is relayed: an older hub's admin UI references
+    `/assets/…` at the root and would be a page of 404s under the prefix, so
+    it keeps being framed directly.
+    """
+    if not await async_probe_mount_support(hass, entry, url):
+        return {}
+    return {"proxy_base": proxy_base_for(async_issue_panel_grant(hass, entry.entry_id))}
+
+
+async def async_probe_mount_support(
+    hass: HomeAssistant, entry: ConfigEntry, url: str
+) -> bool:
+    """Ask the hub whether its admin UI honours `X-Forwarded-Prefix`."""
+    verify_ssl = entry.data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
+    session = async_get_clientsession(hass, verify_ssl=verify_ssl)
+    try:
+        async with session.get(
+            f"{url.rstrip('/')}/",
+            headers={"X-Forwarded-Prefix": MOUNT_PROBE_PREFIX},
+            timeout=ClientTimeout(total=MOUNT_PROBE_TIMEOUT.total_seconds()),
+            allow_redirects=False,
+        ) as response:
+            if response.status != 200:
+                return False
+            head = await response.content.read(MOUNT_PROBE_READ_BYTES)
+    except (ClientError, TimeoutError, OSError) as err:
+        _LOGGER.debug("hub %s did not answer the mount probe: %s", url, err)
+        return False
+    return MOUNT_MARKER.encode() in head
 
 
 def async_remove_panel(hass: HomeAssistant, entry_id: str | None = None) -> None:

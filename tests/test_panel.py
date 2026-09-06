@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 from homeassistant.components.frontend import DATA_PANELS
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_HOST, CONF_PORT
@@ -20,9 +22,19 @@ from custom_components.camstack.const import (
     CONFIG_VIEW_URL,
     PANEL_URL_PATH,
 )
-from custom_components.camstack.frontend import CARD_MODULE_URLS, PANEL_MODULE_URL
+from custom_components.camstack.frontend import (
+    CARD_MODULE_URLS,
+    PANEL_MODULE_URL,
+    # Bound at import, BEFORE the autouse fixture patches the name in the
+    # module: the probe test wants the real one.
+    async_probe_mount_support,
+)
 
 from .test_entities import setup_integration
+
+MOUNT_INDEX = (
+    b'<html><head><base href="/x/"><meta name="camstack-mount" content="/x/"></head>'
+)
 
 
 def panel(hass: HomeAssistant):
@@ -188,3 +200,50 @@ async def test_the_card_endpoint_refuses_an_unauthenticated_caller(
 
     response = await client.get(CONFIG_VIEW_URL)
     assert response.status == 401
+
+
+async def test_the_panel_is_framed_through_the_relay_only_when_the_hub_can_be(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    no_mount_probe: AsyncMock,
+) -> None:
+    """An older hub's admin UI would be 404s under a prefix: it stays direct."""
+    await setup_integration(hass, config_entry)
+    assert "proxy_base" not in panel(hass).config
+
+    no_mount_probe.return_value = True
+    await hass.config_entries.async_reload(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert panel(hass).config["proxy_base"].startswith("/api/camstack/p/")
+    assert panel(hass).config["url"] == "https://192.168.1.9:4443"
+
+
+async def test_the_mount_probe_reads_the_marker_the_hub_answers_with(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    socket_enabled: None,
+) -> None:
+    """Direct, against a real listener: the marker means relay, anything else means not."""
+    seen: list[str | None] = []
+
+    async def index(request: web.Request) -> web.Response:
+        seen.append(request.headers.get("X-Forwarded-Prefix"))
+        body = MOUNT_INDEX if request.query.get("new") else b"<html>old</html>"
+        return web.Response(body=body, content_type="text/html")
+
+    app = web.Application()
+    app.router.add_get("/", index)
+    server = TestServer(app)
+    await server.start_server()
+    try:
+        base = str(server.make_url("")).rstrip("/")
+        assert not await async_probe_mount_support(hass, config_entry, base)
+        assert await async_probe_mount_support(hass, config_entry, f"{base}/?new=1")
+        assert seen == ["/camstack-mount-probe", "/camstack-mount-probe"]
+        assert not await async_probe_mount_support(
+            hass, config_entry, "http://127.0.0.1:9"
+        )
+    finally:
+        await server.close()
