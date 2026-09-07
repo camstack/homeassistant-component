@@ -87,9 +87,9 @@ class FakeHub:
             text=f"hub says {request.path}",
             content_type="text/html",
             headers={
-            "X-Hub": "yes",
-            "Set-Cookie": "camstack_session=jwt; Path=/; HttpOnly; SameSite=Lax",
-        },
+                "X-Hub": "yes",
+                "Set-Cookie": "camstack_session=jwt; Path=/; HttpOnly; SameSite=Lax",
+            },
         )
 
     async def _trpc(self, request: web.Request) -> web.StreamResponse:

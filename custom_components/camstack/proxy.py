@@ -261,12 +261,8 @@ class CamStackProxyView(HomeAssistantView):
         try:
             if _is_websocket(request):
                 return await _relay_websocket(request, session, url, headers)
-            cookie_path = (
-                proxy_base_for(grant) if record.kind == GRANT_PANEL else None
-            )
-            return await _relay_request(
-                request, session, url, headers, cookie_path
-            )
+            cookie_path = proxy_base_for(grant) if record.kind == GRANT_PANEL else None
+            return await _relay_request(request, session, url, headers, cookie_path)
         except (aiohttp.ClientError, TimeoutError, OSError) as err:
             # Warning, not debug: this 502 is painted INTO a dashboard card,
             # and an operator who sees it deserves a line naming the hub and
