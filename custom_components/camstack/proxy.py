@@ -51,11 +51,11 @@ from typing import Any
 
 import aiohttp
 from aiohttp import ClientTimeout, hdrs, web
-from multidict import CIMultiDict
 from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
+from multidict import CIMultiDict
 
 from .const import (
     CONF_VERIFY_SSL,
@@ -313,7 +313,7 @@ def _forward_headers(
 
 
 def _rewritten_cookie(value: str, cookie_path: str) -> str:
-    """The hub's `Set-Cookie`, re-pathed to the grant it was issued under.
+    """Return the hub's `Set-Cookie`, re-pathed to the grant that issued it.
 
     The cookie lands in the browser under HOME ASSISTANT's origin, so left at
     the hub's own `Path=/` it would ride along on every unrelated Home
@@ -327,7 +327,7 @@ def _rewritten_cookie(value: str, cookie_path: str) -> str:
 def _response_headers(
     response: aiohttp.ClientResponse, cookie_path: str | None
 ) -> CIMultiDict[str]:
-    """The headers the browser gets back.
+    """Return the headers the browser gets back.
 
     `cookie_path` is the grant's own prefix for a panel grant, and `None` for an
     embed grant, which injects a share token and has no session to carry. A
