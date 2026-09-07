@@ -51,7 +51,13 @@ async def test_the_panel_url_is_derived_from_the_hub_the_entry_already_knows(
     registered = panel(hass)
     assert registered is not None
     assert registered.config["url"] == "https://192.168.1.9:4443"
-    assert registered.config["_panel_custom"]["module_url"] == PANEL_MODULE_URL
+    # Versioned since 2026-09-07: the file is served with an ETag and no
+    # cache-control and the frontend caches panel modules, so without the query
+    # a released panel never reaches a browser holding the old one — which is
+    # how an operator on a relay-capable release kept running the pre-relay
+    # panel and seeing a white page.
+    module_url = registered.config["_panel_custom"]["module_url"]
+    assert module_url.startswith(f"{PANEL_MODULE_URL}?v=")
     # Nothing about the panel is stored: strip the entry's connection and the
     # URL cannot survive.
     assert CONF_PANEL_URL not in config_entry.data
