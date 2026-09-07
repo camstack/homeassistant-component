@@ -120,13 +120,20 @@ async def _async_register_panel(hass: HomeAssistant, entry: ConfigEntry) -> None
     # The sidebar is a single surface. Replacing rather than adding keeps two
     # entries from fighting over it and raising on the second registration.
     async_remove_panel(hass)
+    panel_version = (await async_get_integration(hass, DOMAIN)).version
     await panel_custom.async_register_panel(
         hass,
         frontend_url_path=PANEL_URL_PATH,
         webcomponent_name=PANEL_COMPONENT_NAME,
         sidebar_title=str(options.get(CONF_PANEL_TITLE) or DEFAULT_PANEL_TITLE),
         sidebar_icon=str(options.get(CONF_PANEL_ICON) or DEFAULT_PANEL_ICON),
-        module_url=PANEL_MODULE_URL,
+        # Versioned like the cards. Without the query a released panel never
+        # reaches a browser that already holds the old module: the file is
+        # served with an ETag and no cache-control, and Home Assistant's
+        # frontend caches panel modules. An operator on 0.5.12+ could still be
+        # running the pre-relay panel, which frames the hub directly and shows
+        # a white rectangle when the browser refuses its certificate.
+        module_url=f"{PANEL_MODULE_URL}?v={panel_version}",
         embed_iframe=True,
         require_admin=False,
         config={

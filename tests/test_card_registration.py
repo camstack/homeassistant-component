@@ -137,3 +137,38 @@ def test_a_card_keeps_asking_which_hub_instead_of_declaring_none(filename: str) 
     assert "_clearBaseTimer()" in source, (
         f"{filename}: the retry timer outlives the card"
     )
+
+
+def test_the_panel_reads_its_relayed_frame_back_instead_of_going_white() -> None:
+    """A relayed panel that fails must say so, not show a white rectangle.
+
+    The relay is same-origin, so its answer is legible. Before 2026-09-07 the
+    relayed branch mounted the frame and said nothing, so a forgotten grant or
+    an unreachable hub was a blank page with no explanation (operator, twice).
+    """
+    source = (ASSET_DIR / "camstack-panel.js").read_text(encoding="utf-8")
+    assert "_watchRelayed(" in source, "the relayed frame is never read back"
+    assert "response.status === 401 || response.status === 404" in source, (
+        "a forgotten grant is not told apart from a dead hub"
+    )
+    assert "this._renderMessage(message)" in source, "the failure is never shown"
+
+
+def test_the_panel_module_url_carries_the_version() -> None:
+    """A released panel must reach a browser that holds the old module.
+
+    The file is served with an ETag and no cache-control, and the frontend
+    caches panel modules: without the query an operator on a new release could
+    still run the pre-relay panel, which frames the hub directly.
+    """
+    source = (
+        Path(__file__).parent.parent
+        / "custom_components"
+        / "camstack"
+        / "frontend"
+        / "__init__.py"
+    ).read_text(encoding="utf-8")
+    assert 'module_url=f"{PANEL_MODULE_URL}?v={panel_version}"' in source
+    assert (
+        "panel_version = (await async_get_integration(hass, DOMAIN)).version" in source
+    )

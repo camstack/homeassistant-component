@@ -169,9 +169,19 @@ class CamstackPanel extends HTMLElement {
     return box;
   }
 
+  /**
+   * The panel framed THROUGH Home Assistant.
+   *
+   * Same origin as this page, so there is no certificate to refuse — but a
+   * relay can still fail: Home Assistant restarts and forgets the grant, or
+   * the hub does not answer. Before 2026-09-07 this branch mounted the frame
+   * and said nothing, so any of those was a WHITE PAGE with no explanation
+   * (operator, twice). The answer is legible here precisely because it is
+   * same-origin: read it back and say what happened.
+   */
   _renderRelayedFrame(url) {
     this._clearTimeout();
-    this._probeToken += 1;
+    const token = ++this._probeToken;
     const container = document.createElement("div");
     container.style.cssText =
       "position:relative;width:100%;height:100%;background:var(--primary-background-color,#0a0a0a);";
@@ -182,6 +192,27 @@ class CamstackPanel extends HTMLElement {
       "position:absolute;inset:0;width:100%;height:100%;border:none;";
     container.appendChild(iframe);
     this.shadowRoot.replaceChildren(container);
+    this._watchRelayed(url, container, token);
+  }
+
+  /** Read the relayed answer back, and replace a failure with its reason. */
+  _watchRelayed(url, container, token) {
+    fetch(url, { cache: "no-store", credentials: "same-origin" })
+      .then((response) => {
+        if (token !== this._probeToken) return null;
+        if (response.ok) return null;
+        // 401/404 is a grant Home Assistant no longer knows — it restarted
+        // while this page stayed open. Reloading re-registers the panel with
+        // a fresh grant; this page cannot mint one for itself.
+        return response.status === 401 || response.status === 404
+          ? "The CamStack panel link expired because Home Assistant restarted. Reload this page."
+          : `The CamStack hub did not answer through Home Assistant (HTTP ${response.status}).`;
+      })
+      .catch((err) => `The CamStack panel could not be reached: ${(err && err.message) || err}`)
+      .then((message) => {
+        if (message === null || token !== this._probeToken) return;
+        this._renderMessage(message);
+      });
   }
 
   _renderFrame(url) {
