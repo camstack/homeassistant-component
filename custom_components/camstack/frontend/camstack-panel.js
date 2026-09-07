@@ -73,8 +73,36 @@ class CamstackPanel extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this._config = null;
+    this._panel = null;
+    /** Last rendered (url, proxy_base) pair — see the `panel` setter. */
+    this._configFingerprint = null;
     this._loadTimeout = null;
     this._probeToken = 0;
+  }
+
+  /**
+   * A custom element is `display: inline` and zero-height by default, and the
+   * document Home Assistant builds for an embedded panel gives its body no
+   * height either. Every child here sizes with `height: 100%`, so both had to
+   * be stated or the frame collapsed to 0 x 0 — content present, nothing
+   * visible, which is the same white page as having no content at all.
+   *
+   * The document is sized only when this element IS the page — a direct child
+   * of its body, which is how Home Assistant mounts a panel. Anything embedding
+   * it deeper is laid out by its own container and never has its document
+   * rewritten. The condition is the mounting shape, not the frame nesting: a
+   * nesting test passes in Home Assistant and quietly fails anywhere else,
+   * which is how this collapsed the first time it was written.
+   */
+  connectedCallback() {
+    this.style.display = "block";
+    this.style.height = "100%";
+    const doc = this.ownerDocument;
+    if (doc && doc.body && this.parentElement === doc.body) {
+      doc.documentElement.style.height = "100%";
+      doc.body.style.height = "100%";
+      doc.body.style.margin = "0";
+    }
   }
 
   disconnectedCallback() {
@@ -89,6 +117,39 @@ class CamstackPanel extends HTMLElement {
       clearTimeout(this._loadTimeout);
       this._loadTimeout = null;
     }
+  }
+
+  /**
+   * WHAT HOME ASSISTANT ACTUALLY SETS.
+   *
+   * A custom panel's element receives `hass`, `narrow`, `route` and **`panel`**
+   * — never a bare `config`. This class only had a `config` setter, so nothing
+   * ever ran: `_config` stayed null, the shadow root stayed empty, and the
+   * panel was a WHITE PAGE with no error anywhere, because an element that
+   * renders nothing is not a failure the browser reports (operator, twice;
+   * confirmed in the live DOM on 2026-09-07 — `panel` populated, `_config`
+   * null, zero shadow children).
+   *
+   * Forwarding is idempotent on purpose: Home Assistant re-assigns `panel` on
+   * navigation, and rebuilding the frame for an unchanged config would reload
+   * the whole admin UI under the operator.
+   */
+  set panel(panel) {
+    this._panel = panel;
+    const config = panel && panel.config;
+    if (!config) {
+      return;
+    }
+    const fingerprint = `${config.url ?? ""}|${config.proxy_base ?? ""}`;
+    if (fingerprint === this._configFingerprint) {
+      return;
+    }
+    this._configFingerprint = fingerprint;
+    this.config = config;
+  }
+
+  get panel() {
+    return this._panel;
   }
 
   set config(config) {
