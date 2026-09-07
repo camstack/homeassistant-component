@@ -857,6 +857,12 @@ class CamstackGridCard extends HTMLElement {
     this._pruneHostState(deviceIds);
     const config = {
       serverUrl,
+      // This dashboard has nowhere to mount the tile's linked-devices and
+      // view-options panels, so the embed must not draw the two discs that
+      // open them: without this they were visible on every tile and inert
+      // (operator, 2026-09-07). Needs viewer 1.0.461+; an older embed ignores
+      // the key and keeps drawing them.
+      cellPanels: false,
       ...(grant && grant.token ? { token: grant.token } : {}),
       devices: deviceIds,
       layout: this._layout(deviceIds),

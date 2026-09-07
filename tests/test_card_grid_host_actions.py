@@ -163,3 +163,21 @@ def test_the_wildcard_guard_would_catch_a_real_regression() -> None:
         r'postMessage\([^)]*,\s*[\'"]\*[\'"]',
         'frame.postMessage({ type: "embed-command" }, "*");',
     )
+
+
+def test_the_grid_card_tells_the_embed_it_has_no_panels_to_show() -> None:
+    """An ignored intent must not leave a visible button behind.
+
+    `ptzOpen` and `tileRemove`/`tileResize` are already invisible here: the
+    embed gates them on `ptzIds` and `editable`, which this card never sets.
+    The secondary discs were NOT — the grid page passed their callback
+    unconditionally, so they were drawn on every tile and did nothing when
+    tapped. The card says `cellPanels: false`; the embed withholds the
+    callback and the tile draws nothing.
+    """
+    source = (FRONTEND / "camstack-grid-card.js").read_text(encoding="utf-8")
+    assert "cellPanels: false" in source, "the card never declares it has no panels"
+    assert "ptzIds" not in source.replace("`ptzIds`", ""), (
+        "the card must not declare PTZ ids"
+    )
+    assert "editable: true" not in source, "the card must not declare the wall editable"
