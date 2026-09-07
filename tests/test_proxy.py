@@ -86,7 +86,10 @@ class FakeHub:
         return web.Response(
             text=f"hub says {request.path}",
             content_type="text/html",
-            headers={"X-Hub": "yes", "Set-Cookie": "hub=1"},
+            headers={
+            "X-Hub": "yes",
+            "Set-Cookie": "camstack_session=jwt; Path=/; HttpOnly; SameSite=Lax",
+        },
         )
 
     async def _trpc(self, request: web.Request) -> web.StreamResponse:
@@ -417,3 +420,35 @@ async def test_the_relay_never_asks_the_hub_for_an_encoding_it_cannot_decode(
 
     assert response.status == 200
     assert hub.requests[-1]["accept_encoding"] == "gzip, deflate"
+
+
+async def test_the_panel_grant_carries_the_hub_session_cookie_under_its_own_path(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hub: FakeHub,
+    hass_client_no_auth: ClientSessionGenerator,
+) -> None:
+    """The admin UI signs in through the relay, so its cookie must survive it.
+
+    An `<img>` cannot send a bearer header — it can only send a cookie. The
+    relay used to drop `Set-Cookie` for every grant, so inside Home Assistant
+    the admin UI logged in, held its token for every JSON call, and every
+    snapshot came back 401 with nothing in any console to say why.
+
+    The cookie is re-pathed to the grant on the way out: it lands under Home
+    Assistant's origin, and left at the hub's `Path=/` it would be sent on
+    every unrelated Home Assistant request.
+    """
+    await _setup(hass, config_entry)
+    grant = async_issue_panel_grant(hass, config_entry.entry_id)
+    client = await hass_client_no_auth()
+
+    response = await client.get(f"{PROXY_VIEW_URL}/{grant}/viewer/anything")
+
+    assert response.status == 200
+    cookie = response.headers["Set-Cookie"]
+    assert "camstack_session=jwt" in cookie
+    assert f"Path={PROXY_VIEW_URL}/{grant}" in cookie
+    assert "Path=/;" not in cookie
+    assert "HttpOnly" in cookie

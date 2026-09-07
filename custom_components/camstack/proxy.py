@@ -51,6 +51,7 @@ from typing import Any
 
 import aiohttp
 from aiohttp import ClientTimeout, hdrs, web
+from multidict import CIMultiDict
 from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -106,7 +107,11 @@ _RESPONSE_HEADERS_DROPPED = frozenset(
         hdrs.CONTENT_LENGTH,
         hdrs.CONTENT_TYPE,
         hdrs.CONTENT_ENCODING,
-        hdrs.SET_COOKIE,
+        # NOT Set-Cookie — see `_response_headers`. Dropping it silently was
+        # why the admin UI showed no snapshots inside Home Assistant: the hub
+        # issued its session cookie, the relay threw it away, and only the
+        # surfaces that can authenticate by cookie alone (a plain <img>) came
+        # back 401 while every token-carrying call worked.
         "Access-Control-Allow-Origin",
         "Access-Control-Allow-Credentials",
         "Access-Control-Allow-Methods",
@@ -256,7 +261,12 @@ class CamStackProxyView(HomeAssistantView):
         try:
             if _is_websocket(request):
                 return await _relay_websocket(request, session, url, headers)
-            return await _relay_request(request, session, url, headers)
+            cookie_path = (
+                proxy_base_for(grant) if record.kind == GRANT_PANEL else None
+            )
+            return await _relay_request(
+                request, session, url, headers, cookie_path
+            )
         except (aiohttp.ClientError, TimeoutError, OSError) as err:
             # Warning, not debug: this 502 is painted INTO a dashboard card,
             # and an operator who sees it deserves a line naming the hub and
@@ -302,12 +312,39 @@ def _forward_headers(
     return headers
 
 
-def _response_headers(response: aiohttp.ClientResponse) -> dict[str, str]:
-    return {
-        name: value
-        for name, value in response.headers.items()
-        if name not in _RESPONSE_HEADERS_DROPPED
-    }
+def _rewritten_cookie(value: str, cookie_path: str) -> str:
+    """The hub's `Set-Cookie`, re-pathed to the grant it was issued under.
+
+    The cookie lands in the browser under HOME ASSISTANT's origin, so left at
+    the hub's own `Path=/` it would ride along on every unrelated Home
+    Assistant request. Re-pathing scopes it to this grant: the browser sends it
+    back through the relay and nowhere else.
+    """
+    parts = [part for part in value.split(";") if part.strip().lower()[:5] != "path="]
+    return ";".join([*parts, f" Path={cookie_path}"])
+
+
+def _response_headers(
+    response: aiohttp.ClientResponse, cookie_path: str | None
+) -> CIMultiDict[str]:
+    """The headers the browser gets back.
+
+    `cookie_path` is the grant's own prefix for a panel grant, and `None` for an
+    embed grant, which injects a share token and has no session to carry. A
+    response may carry several `Set-Cookie` lines, so this walks the multidict
+    rather than collapsing it into a plain dict.
+    """
+    out: CIMultiDict[str] = CIMultiDict()
+    for name, value in response.headers.items():
+        if name in _RESPONSE_HEADERS_DROPPED:
+            continue
+        if name.lower() == "set-cookie":
+            if cookie_path is None:
+                continue
+            out.add(name, _rewritten_cookie(value, cookie_path))
+            continue
+        out.add(name, value)
+    return out
 
 
 def _is_websocket(request: web.Request) -> bool:
@@ -323,6 +360,7 @@ async def _relay_request(
     session: aiohttp.ClientSession,
     url: str,
     headers: dict[str, str],
+    cookie_path: str | None,
 ) -> web.Response | web.StreamResponse:
     async with session.request(
         request.method,
@@ -333,7 +371,7 @@ async def _relay_request(
         timeout=ClientTimeout(total=None),
         skip_auto_headers={hdrs.CONTENT_TYPE},
     ) as result:
-        out_headers = _response_headers(result)
+        out_headers = _response_headers(result, cookie_path)
         declared = result.headers.get(hdrs.CONTENT_LENGTH)
         if (
             declared is not None and int(declared) < _INLINE_BODY_MAX
