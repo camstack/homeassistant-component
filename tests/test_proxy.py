@@ -261,6 +261,15 @@ def test_the_relayed_path_set_is_the_embeds_call_graph() -> None:
     assert is_relayed_path("trpc/health")
     assert is_relayed_path("viewer/camstack/embed/index.html")
     assert is_relayed_path("addon/snapshot/media/615.jpg")
+    # The plane the viewer ACTUALLY asks for. `snapshot.getSnapshotLinks` mints
+    # `/addon/snapshot/link/<id>.jpg?w&v&exp&sig` — the public, HMAC-signed
+    # plane — and this list, written when only the authenticated `media` plane
+    # existed, refused every one of them. The cards showed a hub that worked in
+    # every respect except the pictures.
+    assert is_relayed_path("addon/snapshot/link/615.jpg")
+    assert is_relayed_path(
+        "addon/snapshot/link/615.jpg?w=320&v=1788868092889&exp=1788868230000"
+    )
     assert is_relayed_path("addon/pipeline-analytics/event-media/x.jpg")
     assert not is_relayed_path("")
     assert not is_relayed_path("trpcx")

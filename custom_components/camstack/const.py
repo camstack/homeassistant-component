@@ -83,7 +83,15 @@ PROXY_VIEW_URL: Final = "/api/camstack/p"
 PROXY_ALLOWED_PREFIXES: Final = (
     "viewer/",
     "trpc/",
+    # BOTH snapshot planes. `media` is the authenticated one this list was
+    # written for; `link` is the public, HMAC-signed plane that
+    # `snapshot.getSnapshotLinks` has minted ever since it existed —
+    # `/addon/snapshot/link/<deviceId>.jpg?w&v&exp&sig`. The viewer asks for
+    # `link` and nothing else, so a list carrying only `media` refused every
+    # picture while every other call went through: the card framed a hub that
+    # worked in every respect except the one the operator was looking at.
     "addon/snapshot/media/",
+    "addon/snapshot/link/",
     "addon/pipeline-analytics/event-media/",
 )
 # The panel is relayed only when the hub honours `X-Forwarded-Prefix`: its
