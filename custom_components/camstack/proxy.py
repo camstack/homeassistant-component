@@ -61,6 +61,7 @@ from .const import (
     CONF_VERIFY_SSL,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
+    HUB_SESSION_COOKIE,
     PROXY_ALLOWED_PREFIXES,
     PROXY_GRANT_GRACE,
     PROXY_VIEW_URL,
@@ -256,7 +257,12 @@ class CamStackProxyView(HomeAssistantView):
         url = f"{base.rstrip('/')}/{path}"
         if request.query_string:
             url = f"{url}?{request.query_string}"
-        headers = _forward_headers(request, record.token, proxy_base_for(grant))
+        headers = _forward_headers(
+            request,
+            record.token,
+            proxy_base_for(grant),
+            carry_session=record.kind == GRANT_PANEL,
+        )
 
         try:
             if _is_websocket(request):
@@ -279,19 +285,46 @@ class CamStackProxyView(HomeAssistantView):
     patch = _handle
 
 
+def _hub_session_cookie(request: web.Request) -> str | None:
+    """Return the hub's own session cookie pair from the browser's `Cookie`.
+
+    ONLY that pair. The header also carries Home Assistant's cookies — this
+    request arrives on HA's origin — and forwarding those upstream would hand
+    the hub a credential for a system it has no business holding one for.
+    """
+    value = request.cookies.get(HUB_SESSION_COOKIE)
+    return None if value is None else f"{HUB_SESSION_COOKIE}={value}"
+
+
 def _forward_headers(
-    request: web.Request, token: str | None, prefix: str
+    request: web.Request,
+    token: str | None,
+    prefix: str,
+    *,
+    carry_session: bool = False,
 ) -> dict[str, str]:
     """Return the request headers the hub gets.
 
     The browser's, minus hop-by-hop and Home Assistant's own, plus the
     grant's credential.
+
+    `carry_session` is the PANEL's credential, and the panel has no other:
+    `async_issue_panel_grant` injects no bearer, so the admin UI signs in
+    through the relay and the hub's own `camstack_session` authorises every
+    request after that. `Cookie` is dropped for every grant by default — right
+    for an embed, which carries a share token — and dropping it for the panel
+    too meant everything unauthenticated loaded while every snapshot came back
+    401 (operator report, 2026-09-08).
     """
     headers = {
         name: value
         for name, value in request.headers.items()
         if name not in _REQUEST_HEADERS_DROPPED
     }
+    if carry_session:
+        session = _hub_session_cookie(request)
+        if session is not None:
+            headers[hdrs.COOKIE] = session
     if token is not None:
         headers[hdrs.AUTHORIZATION] = f"Bearer {token}"
     # Never the browser's list — see `_ACCEPT_ENCODING`.

@@ -96,6 +96,9 @@ PROXY_ALLOWED_PREFIXES: Final = (
 )
 # The panel is relayed only when the hub honours `X-Forwarded-Prefix`: its
 # index, asked for under a probe prefix, carries this marker.
+# The hub's own session cookie. The panel signs in through the relay and this
+# is the only credential it has afterwards — an `<img>` cannot send a bearer.
+HUB_SESSION_COOKIE: Final = "camstack_session"
 MOUNT_MARKER: Final = 'name="camstack-mount"'
 MOUNT_PROBE_PREFIX: Final = "/camstack-mount-probe"
 MOUNT_PROBE_TIMEOUT: Final = timedelta(seconds=5)

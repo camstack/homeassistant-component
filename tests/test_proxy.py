@@ -461,3 +461,56 @@ async def test_the_panel_grant_carries_the_hub_session_cookie_under_its_own_path
     assert f"Path={PROXY_VIEW_URL}/{grant}" in cookie
     assert "Path=/;" not in cookie
     assert "HttpOnly" in cookie
+
+
+async def test_the_panel_grant_sends_the_hub_session_cookie_back_up(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hub: FakeHub,
+    hass_client_no_auth: ClientSessionGenerator,
+) -> None:
+    """The panel's ONLY credential is the cookie, so the relay must carry it.
+
+    A panel grant injects no bearer (`ProxyGrant.token` is None): the admin UI
+    signs in through the relay and the hub's own `camstack_session` is what
+    authorises every request afterwards. The relay dropped `Cookie` on the way
+    up for every grant — right for an embed, which carries a share token — so
+    the panel authenticated nothing. Everything unauthenticated loaded (the
+    bundle, the brand mark, the icons) and every snapshot came back 401, which
+    is exactly what the operator reported on 2026-09-08.
+
+    Home Assistant's own cookies must still never reach the hub: only the pair
+    the relay itself set is forwarded.
+    """
+    await _setup(hass, config_entry)
+    grant = async_issue_panel_grant(hass, config_entry.entry_id)
+    client = await hass_client_no_auth()
+
+    response = await client.get(
+        f"{PROXY_VIEW_URL}/{grant}/addon/snapshot/media/590.jpg",
+        headers={"Cookie": "ha_session=secret; camstack_session=jwt"},
+    )
+
+    assert response.status == 200
+    assert hub.requests[-1]["cookie"] == "camstack_session=jwt"
+
+
+async def test_an_embed_grant_still_sends_no_cookie_at_all(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hub: FakeHub,
+    hass_client_no_auth: ClientSessionGenerator,
+) -> None:
+    """An embed carries a share token; its cookies are Home Assistant's alone."""
+    await _setup(hass, config_entry)
+    grant = _grant_for(hass, config_entry.entry_id)
+    client = await hass_client_no_auth()
+
+    await client.get(
+        f"{PROXY_VIEW_URL}/{grant}/addon/snapshot/media/590.jpg",
+        headers={"Cookie": "ha_session=secret; camstack_session=jwt"},
+    )
+
+    assert hub.requests[-1]["cookie"] is None
