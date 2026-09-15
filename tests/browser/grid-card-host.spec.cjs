@@ -318,6 +318,68 @@ async function run() {
       assert.deepEqual(paused, { kind: "setPaused", value: [11] });
     });
 
+    // ── the arrangement, measured in a real browser ──────────────────────
+    //
+    // `flow` caps a camera's width in PIXELS, so it is a function of how wide
+    // the card actually is. jsdom cannot answer that — it has no layout — so
+    // this is the only place the promise can be checked at all.
+    const geometry = async (config, cardWidth) =>
+      page.evaluate(
+        async ([cfg, width]) => {
+          const card = document.querySelector("camstack-grid-card");
+          card.style.display = "block";
+          card.style.width = `${width}px`;
+          card.setConfig({ entities: ["camera.front", "camera.back"], ...cfg });
+          card.hass = window.__makeHass();
+          // Two frames: one for the resize to land, one for the restyle.
+          await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+          const root = card.shadowRoot;
+          const frame = root.querySelector("iframe");
+          const scroller = frame.parentElement;
+          return {
+            frameHeight: frame.getBoundingClientRect().height,
+            scrollerHeight: scroller.getBoundingClientRect().height,
+            overflowY: getComputedStyle(scroller).overflowY,
+            tileWidth: frame.getBoundingClientRect().width / (cfg.__cols || 1),
+          };
+        },
+        [config, cardWidth]
+      );
+
+    // 8 cameras, card 1400 px, no camera wider than 480 ⇒ 3 columns (1400/3 =
+    // 467 ≤ 480), 3 rows of them, 2 visible.
+    const eight = Array.from({ length: 8 }, (_, i) => `camera.c${i}`);
+    await page.evaluate((ids) => {
+      const hass = window.__makeHass();
+      ids.forEach((id, i) => {
+        hass.states[id] = { attributes: { camstack_device_id: 100 + i, friendly_name: id } };
+      });
+      window.__makeHass = () => hass;
+    }, eight);
+
+    const flow = await geometry(
+      { entities: eight, layout_mode: "flow", max_tile_width: 480, max_rows: 2, __cols: 3 },
+      1400
+    );
+    check("flow: no camera is wider than the cap the operator set", () => {
+      assert.ok(flow.tileWidth <= 480 + 1, `tile ${flow.tileWidth}px exceeds 480px`);
+    });
+    check("flow: the viewport shows max_rows, the wall behind it is taller", () => {
+      assert.equal(flow.overflowY, "auto");
+      assert.ok(
+        flow.frameHeight > flow.scrollerHeight + 1,
+        `wall ${flow.frameHeight} is not taller than the viewport ${flow.scrollerHeight}`
+      );
+      // 3 rows behind a 2-row viewport.
+      const ratio = flow.frameHeight / flow.scrollerHeight;
+      assert.ok(Math.abs(ratio - 3 / 2) < 0.05, `rows ratio ${ratio}, expected 1.5`);
+    });
+
+    const fit = await geometry({ entities: eight, layout_mode: "fit" }, 1400);
+    check("fit: nothing scrolls — that is the whole promise of the mode", () => {
+      assert.notEqual(fit.overflowY, "auto");
+    });
+
     check("no command was ever posted to a wildcard origin", () => {
       // Nothing to read at runtime — the browser would have delivered it either
       // way. The grep guard covers the source; here we only confirm the frame

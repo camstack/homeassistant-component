@@ -153,13 +153,98 @@ const TOKEN_RENEW_MARGIN_MS = 120000;
  *
  * `quality` is `gridQualitySchema` verbatim (the system profile enum plus
  * `auto`); `layout` is the fixed column count `gridLayoutSchema` accepts.
- * `max_visible` has NO counterpart in the embed — see `_scrollGeometry`.
+ * `max_visible` is LEGACY: it is read only to derive a layout mode for a
+ * dashboard written before `layout_mode` existed — see `_layoutMode`.
  */
 const EMBED_CONTRACT = {
   quality: ["auto", "high", "mid", "low"],
   layout: [1, 12],
   max_visible: [1, 12],
+  rows: [1, 8],
+  max_rows: [1, 8],
 };
+
+/**
+ * HOW the wall is arranged — one control, three answers, and each answer owns
+ * its own fields.
+ *
+ * What this replaces: `max_visible` and `layout` used to disable each other,
+ * and each said so in its own label ("not used while the wall scrolls", "used
+ * when shape is fixed"). The operator had to hold a state machine in their head
+ * to know which of the four controls in front of them were live. Worse, the
+ * only scroll on offer was a single HORIZONTAL row, so "show me two rows and
+ * let the rest scroll" — the most ordinary wall there is — could not be said.
+ *
+ *  - `fit`   every camera visible, nothing scrolls. The wall shrinks to fit.
+ *  - `flow`  a camera is never bigger than `max_tile_width`; as many columns as
+ *            fit across the card, `max_rows` of them visible, the rest scrolls.
+ *  - `fixed` exactly `columns` x `rows` visible, the rest scrolls.
+ *
+ * `flow` and `fixed` both scroll VERTICALLY, which is the direction a wall of
+ * rows scrolls and the direction a mouse wheel and a thumb already do.
+ */
+const LAYOUT_MODES = ["fit", "flow", "fixed"];
+
+/** Default cap on one camera's width in `flow`, in CSS px. */
+const DEFAULT_MAX_TILE_WIDTH = 480;
+const MAX_TILE_WIDTH_RANGE = [160, 1920];
+
+/** Clamp `value` into `[min, max]`, or `fallback` when it is not a number. */
+function clampInt(value, [min, max], fallback) {
+  const n = typeof value === "string" ? parseInt(value, 10) : value;
+  if (!Number.isInteger(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+/**
+ * The wall's geometry: how many columns, how many rows exist, how many are
+ * shown, and therefore whether it scrolls.
+ *
+ * Pure, and it takes the card's MEASURED width because that is the only honest
+ * source for `flow`: "no camera wider than 480 px" is a statement about pixels
+ * on the glass, and a card in a sidebar and a card on a wall display are given
+ * very different amounts of them. A guess here would be a promise the layout
+ * cannot keep.
+ *
+ * `cardWidth` of 0 (not yet laid out) resolves to a single column rather than
+ * to a division by zero; the ResizeObserver re-runs this the moment a real
+ * width exists, and the frame is restyled, never rebuilt.
+ */
+function planGrid({ mode, total, cardWidth, columns, rows, maxRows, maxTileWidth }) {
+  const count = Math.max(1, total | 0);
+  const colCap = EMBED_CONTRACT.layout[1];
+
+  if (mode === "flow") {
+    const width = cardWidth > 0 ? cardWidth : 0;
+    const cap = clampInt(maxTileWidth, MAX_TILE_WIDTH_RANGE, DEFAULT_MAX_TILE_WIDTH);
+    // CEIL, not floor: `max_tile_width` is a CAP, so we want the FEWEST columns
+    // whose tiles still fit under it. Floor gives the most columns whose tiles
+    // are at least that wide — the opposite — and a 1400 px card with a 480 px
+    // cap would have laid out two tiles of 700 px each, breaking the only
+    // promise this setting makes.
+    const fit = width > 0 ? Math.ceil(width / cap) : 1;
+    const cols = Math.min(colCap, Math.max(1, fit), count);
+    const totalRows = Math.ceil(count / cols);
+    const visibleRows = Math.min(totalRows, clampInt(maxRows, EMBED_CONTRACT.max_rows, 2));
+    return { columns: cols, totalRows, visibleRows, scrolls: totalRows > visibleRows };
+  }
+
+  if (mode === "fixed") {
+    const cols = Math.min(colCap, clampInt(columns, EMBED_CONTRACT.layout, 3));
+    const totalRows = Math.ceil(count / cols);
+    const visibleRows = Math.min(totalRows, clampInt(rows, EMBED_CONTRACT.rows, 2));
+    return { columns: cols, totalRows, visibleRows, scrolls: totalRows > visibleRows };
+  }
+
+  // `fit`: everything on screen. The embed picks the shape unless the operator
+  // pinned a column count, and nothing ever scrolls.
+  const pinned = columns === "auto" || columns === undefined || columns === null || columns === ""
+    ? "auto"
+    : clampInt(columns, EMBED_CONTRACT.layout, null);
+  const cols = pinned === "auto" || pinned === null ? "auto" : pinned;
+  const totalRows = cols === "auto" ? 1 : Math.ceil(count / cols);
+  return { columns: cols, totalRows, visibleRows: totalRows, scrolls: false };
+}
 
 /** The words for `gridQualitySchema`. An unknown tier keeps its own id rather
  *  than showing a blank option — the contract test is what catches the drift. */
@@ -294,6 +379,7 @@ class CamstackGridCard extends HTMLElement {
     this._grantRetried = false;
     this._embedReady = false;
     this._scroller = null;
+    this._widthObserver = null;
     /** What this card has already pushed on the open channel, per command — so
      *  a `set hass` storm re-sends nothing and a real change re-sends once. */
     this._publishedWall = {};
@@ -313,10 +399,50 @@ class CamstackGridCard extends HTMLElement {
 
   connectedCallback() {
     window.addEventListener("message", this._onMessage);
+    this._observeWidth();
+  }
+
+  /**
+   * Watch the card's own width.
+   *
+   * `flow` caps a camera's width in PIXELS, so the column count is a function
+   * of how wide this card actually is — which changes with the dashboard
+   * column, the sidebar, and the phone being turned. Restyles, never rebuilds:
+   * a rebuilt iframe renegotiates every WebRTC session on the wall.
+   */
+  _observeWidth() {
+    if (this._widthObserver || typeof ResizeObserver !== "function") {
+      return;
+    }
+    let lastWidth = -1;
+    this._widthObserver = new ResizeObserver(() => {
+      const width = this._cardWidth();
+      // Sub-pixel jitter must not restyle on every animation frame.
+      if (Math.abs(width - lastWidth) < 1) {
+        return;
+      }
+      lastWidth = width;
+      this._restyleFrame();
+    });
+    this._widthObserver.observe(this);
+  }
+
+  /** Re-apply the box styles from the current plan. Never touches the URL. */
+  _restyleFrame() {
+    if (this._iframe) {
+      this._iframe.style.cssText = this._frameStyle();
+    }
+    if (this._scroller) {
+      this._scroller.style.cssText = this._scrollerStyle();
+    }
   }
 
   disconnectedCallback() {
     window.removeEventListener("message", this._onMessage);
+    if (this._widthObserver) {
+      this._widthObserver.disconnect();
+      this._widthObserver = null;
+    }
     this._clearReadyTimer();
     this._clearRetryTimer();
     this._clearBaseTimer();
@@ -916,15 +1042,64 @@ class CamstackGridCard extends HTMLElement {
    * `layout` is then not a second opinion, it is simply not consulted.
    */
   _layout(deviceIds) {
-    if (this._scrollGeometry(deviceIds)) {
-      return deviceIds.length;
+    return this._plan(deviceIds).columns;
+  }
+
+  /**
+   * The layout mode this card is configured for.
+   *
+   * Reads `layout_mode` when present, and otherwise DERIVES one from the old
+   * two-control config so a dashboard written before this option keeps working
+   * untouched:
+   *
+   *  - `max_visible: N` meant "N across, one row, the rest scrolls sideways".
+   *    That is `fixed` with N columns and one row — same cameras on screen,
+   *    same rest-scrolls, in the direction a wall of rows actually scrolls.
+   *  - anything else was a wall that fits, with the column count the operator
+   *    pinned (or `auto`).
+   */
+  _layoutMode() {
+    const declared = this._config.layout_mode;
+    if (LAYOUT_MODES.includes(declared)) {
+      return declared;
     }
-    const raw = this._config.layout;
-    if (raw === undefined || raw === null || raw === "auto" || raw === "") {
-      return "auto";
-    }
-    const columns = typeof raw === "string" ? parseInt(raw, 10) : raw;
-    return Number.isInteger(columns) && columns >= 1 ? columns : "auto";
+    const legacyCap = clampInt(this._config.max_visible, EMBED_CONTRACT.max_visible, null);
+    return legacyCap === null ? "fit" : "fixed";
+  }
+
+  /** The wall's geometry for the cameras it is showing, at its measured width. */
+  _plan(deviceIds) {
+    const mode = this._layoutMode();
+    const legacyCap = clampInt(this._config.max_visible, EMBED_CONTRACT.max_visible, null);
+    const columns =
+      mode === "fixed" && this._config.columns === undefined && legacyCap !== null
+        ? legacyCap
+        : (this._config.columns ?? this._config.layout ?? "auto");
+    const rows =
+      mode === "fixed" && this._config.rows === undefined && legacyCap !== null
+        ? 1
+        : this._config.rows;
+    return planGrid({
+      mode,
+      total: Array.isArray(deviceIds) ? deviceIds.length : 0,
+      cardWidth: this._cardWidth(),
+      columns,
+      rows,
+      maxRows: this._config.max_rows,
+      maxTileWidth: this._config.max_tile_width,
+    });
+  }
+
+  /**
+   * The card's own width in CSS px, measured.
+   *
+   * `flow` is a statement about pixels on the glass, so it needs the real
+   * number and not a breakpoint guess. `0` before the first layout — `planGrid`
+   * treats that as one column and the ResizeObserver restyles the frame the
+   * moment a width exists.
+   */
+  _cardWidth() {
+    return this._scroller ? this._scroller.clientWidth : 0;
   }
 
   /** The cameras this card shows, whatever it was configured with. */
@@ -932,23 +1107,6 @@ class CamstackGridCard extends HTMLElement {
     return this._hass ? resolveDeviceIds(this._hass, this._config) : [];
   }
 
-  /**
-   * `{ maxVisible, total }` when the wall is a scrolling strip, else null.
-   *
-   * Null whenever the cap is off, illegal, or simply NOT REACHED — a wall of
-   * three cameras with a cap of four is the wall that already shipped, and it
-   * must not become a strip with two thirds of the card empty.
-   */
-  _scrollGeometry(deviceIds) {
-    const [min, max] = EMBED_CONTRACT.max_visible;
-    const raw = this._config.max_visible;
-    const cap = typeof raw === "string" ? parseInt(raw, 10) : raw;
-    if (!Number.isInteger(cap) || cap < min || cap > max) {
-      return null;
-    }
-    const total = Array.isArray(deviceIds) ? deviceIds.length : 0;
-    return total > cap ? { maxVisible: cap, total } : null;
-  }
 
   // ── rendering ────────────────────────────────────────────────────────────
 
@@ -958,43 +1116,78 @@ class CamstackGridCard extends HTMLElement {
       : DEFAULT_HEIGHT;
   }
 
-  /** The scroll container. Inert unless a cap is in force, so a wall that fits
-   *  is laid out exactly as it was before this option existed. */
+  /**
+   * The scroll container — the VIEWPORT onto the wall.
+   *
+   * Inert unless the plan says the wall is taller than what is shown, so a wall
+   * that fits is laid out exactly as it was before any of this existed.
+   *
+   * Its height is `visibleRows` worth of tiles. The iframe inside is the FULL
+   * wall, `totalRows` tall, and the operator scrolls this box down it — the
+   * same trick the one-row horizontal cap used, turned through ninety degrees,
+   * which is the direction a wall of rows scrolls and the direction a wheel and
+   * a thumb already go.
+   */
   _scrollerStyle() {
-    return this._scrollGeometry(this._deviceIds())
-      ? "overflow-x:auto;overflow-y:hidden;width:100%;-webkit-overflow-scrolling:touch;"
-      : "width:100%;";
+    const plan = this._plan(this._deviceIds());
+    if (!plan.scrolls) {
+      return "width:100%;";
+    }
+    const tileHeight = this._tileHeightPx(plan);
+    const height = tileHeight > 0 ? `height:${(tileHeight * plan.visibleRows).toFixed(2)}px;` : "";
+    return `overflow-y:auto;overflow-x:hidden;width:100%;${height}-webkit-overflow-scrolling:touch;`;
   }
 
   /**
-   * The iframe's own box.
+   * One tile's height in px at the current width, or `0` before layout.
    *
-   * Scrolling: the frame is made `total / maxVisible` times as wide as the
-   * card and the embed is asked for a single row of `total` tiles, so a tile is
-   * exactly one `maxVisible`th of the visible width. The shape follows from
-   * that — `16·total : 9` is a one-row strip of 16:9 tiles — and it has to,
+   * Derived from the MEASURED width rather than from the configured maximum: a
+   * plan of three columns means the tiles are a third of the card wide, whether
+   * or not that reached the cap.
+   */
+  _tileHeightPx(plan) {
+    const width = this._cardWidth();
+    const columns = plan.columns === "auto" ? 1 : plan.columns;
+    if (!(width > 0) || !(columns > 0)) {
+      return 0;
+    }
+    const ratio = ASPECT_RATIOS[this._config.aspect_ratio || DEFAULT_ASPECT] || ASPECT_RATIOS[DEFAULT_ASPECT];
+    return width / columns / ratio;
+  }
+
+  /**
+   * The iframe's own box — the WHOLE wall, of which the scroller shows a part.
+   *
+   * When the plan scrolls, the frame is `totalRows` tall and the scroller is
+   * `visibleRows` tall, so a tile is exactly one row of the visible box. The
+   * shape has to follow from the plan rather than from `aspect_ratio` alone,
    * because the embed CENTRES its wall inside whatever box it is given: a box
-   * of the wrong shape becomes a band of padding above and below the strip.
-   * Which is also why `aspect_ratio` / `height` are not consulted here: with a
-   * cap the shape is a consequence of the cap, and two controls for one shape
-   * is the argument this card refuses to have.
+   * of the wrong shape becomes a band of padding instead of a taller wall.
+   * That is also why there are not two controls for one shape here — the cap
+   * decides it, and this card refuses to hold that argument twice.
+   *
+   * When nothing scrolls the old behaviour is untouched: `aspect_ratio` shapes
+   * the box, or `none` hands it a pixel height.
    */
   _frameStyle() {
-    const geometry = this._scrollGeometry(this._deviceIds());
-    if (geometry) {
-      const width = ((geometry.total / geometry.maxVisible) * 100).toFixed(4);
-      return (
-        `width:${width}%;aspect-ratio:${16 * geometry.total} / 9;` +
-        "border:none;display:block;border-radius:8px;"
-      );
+    const plan = this._plan(this._deviceIds());
+    const chrome = "border:none;display:block;border-radius:8px;";
+    if (plan.scrolls) {
+      const tileHeight = this._tileHeightPx(plan);
+      if (tileHeight > 0) {
+        return `width:100%;height:${(tileHeight * plan.totalRows).toFixed(2)}px;${chrome}`;
+      }
+      // Pre-layout: no measured width yet, so no honest height. The
+      // ResizeObserver restyles this the moment there is one.
+      return `width:100%;height:${this._frameHeight()}px;${chrome}`;
     }
     const aspect = this._config.aspect_ratio || DEFAULT_ASPECT;
     if (aspect !== "none" && ASPECT_RATIOS[aspect]) {
       // `aspect-ratio` keeps the wall the right shape on a phone and on a wall
       // display without the operator retyping a pixel height per breakpoint.
-      return `width:100%;aspect-ratio:${aspect.replace(":", " / ")};border:none;display:block;border-radius:8px;`;
+      return `width:100%;aspect-ratio:${aspect.replace(":", " / ")};${chrome}`;
     }
-    return `width:100%;height:${this._frameHeight()}px;border:none;display:block;border-radius:8px;`;
+    return `width:100%;height:${this._frameHeight()}px;${chrome}`;
   }
 
   _setStatus(text) {
@@ -1174,6 +1367,55 @@ class CamstackGridCardEditor extends HTMLElement {
       .sort();
   }
 
+  /** The mode the editor is showing, derived for a card written before it. */
+  _mode() {
+    const declared = this._config.layout_mode;
+    if (LAYOUT_MODES.includes(declared)) {
+      return declared;
+    }
+    return clampInt(this._config.max_visible, EMBED_CONTRACT.max_visible, null) === null
+      ? "fit"
+      : "fixed";
+  }
+
+  /**
+   * Only the fields the chosen arrangement actually uses.
+   *
+   * This is the whole point of the rewrite: before, four controls were always
+   * on screen and two of them explained in their own labels when they were
+   * ignored. A control that is not in force is not greyed out here — it is not
+   * there, because a setting you cannot see is a setting you cannot
+   * misconfigure.
+   */
+  _modeFields() {
+    const config = this._config;
+    const mode = this._mode();
+    if (mode === "flow") {
+      return [
+        numberField(
+          "max_tile_width",
+          "Biggest a single camera may get (px)",
+          config.max_tile_width ?? DEFAULT_MAX_TILE_WIDTH
+        ),
+        selectField("max_rows", "Rows visible before it scrolls", String(config.max_rows ?? 2),
+          countOptions(EMBED_CONTRACT.max_rows)),
+      ];
+    }
+    if (mode === "fixed") {
+      const legacy = clampInt(config.max_visible, EMBED_CONTRACT.max_visible, null);
+      return [
+        selectField("columns", "Columns", String(config.columns ?? legacy ?? 3),
+          countOptions(EMBED_CONTRACT.layout)),
+        selectField("rows", "Rows visible before it scrolls",
+          String(config.rows ?? (legacy === null ? 2 : 1)), countOptions(EMBED_CONTRACT.rows)),
+      ];
+    }
+    return [
+      selectField("columns", "Columns", String(config.columns ?? config.layout ?? "auto"),
+        [["auto", "Automatic"], ...countOptions(EMBED_CONTRACT.layout)]),
+    ];
+  }
+
   _render() {
     const config = this._config;
     const wrapper = document.createElement("div");
@@ -1184,29 +1426,22 @@ class CamstackGridCardEditor extends HTMLElement {
       cameraPicker("entities", "Cameras", config.entities || [], this._cameras(), (id) =>
         friendlyName(this._hass, id)
       ),
-      selectField(
-        "max_visible",
-        "Cameras visible at once (the rest scroll horizontally)",
-        String(config.max_visible ?? "off"),
-        [
-          ["off", "All of them, no scrolling"],
-          ...countOptions(EMBED_CONTRACT.max_visible),
-        ]
-      ),
-      selectField(
-        "layout",
-        "Columns (not used while the wall scrolls)",
-        String(config.layout ?? "auto"),
-        [["auto", "Automatic"], ...countOptions(EMBED_CONTRACT.layout)]
-      ),
-      selectField("aspect_ratio", "Shape", config.aspect_ratio || DEFAULT_ASPECT, [
+      selectField("layout_mode", "Arrangement", this._mode(), [
+        ["fit", "Fit them all on screen"],
+        ["flow", "Cap the camera size, scroll the rest"],
+        ["fixed", "Fixed columns and rows, scroll the rest"],
+      ]),
+      ...this._modeFields(),
+      selectField("aspect_ratio", "Camera shape", config.aspect_ratio || DEFAULT_ASPECT, [
         ["16:9", "16:9"],
         ["4:3", "4:3"],
         ["3:2", "3:2"],
         ["1:1", "Square"],
-        ["none", "Fixed height (px)"],
+        ...(this._mode() === "fit" ? [["none", "Fixed height (px)"]] : []),
       ]),
-      numberField("height", "Height in px (used when shape is fixed)", config.height ?? DEFAULT_HEIGHT),
+      ...(this._mode() === "fit" && (config.aspect_ratio || DEFAULT_ASPECT) === "none"
+        ? [numberField("height", "Height in px", config.height ?? DEFAULT_HEIGHT)]
+        : []),
       selectField(
         "quality",
         "Stream quality",
@@ -1233,16 +1468,33 @@ class CamstackGridCardEditor extends HTMLElement {
     const config = { ...this._config };
     setOrDelete(config, "title", readText(root, "title"));
     config.entities = readChecked(root, "entities");
-    const layout = readText(root, "layout");
-    config.layout = layout === "auto" ? "auto" : parseInt(layout, 10);
-    const maxVisible = parseInt(readText(root, "max_visible"), 10);
-    if (Number.isInteger(maxVisible)) {
-      config.max_visible = maxVisible;
+    const mode = readText(root, "layout_mode");
+    config.layout_mode = LAYOUT_MODES.includes(mode) ? mode : "fit";
+
+    // The legacy pair is REWRITTEN, not carried: leaving `max_visible` behind
+    // would let `_layoutMode`'s derivation keep answering for a card whose
+    // mode is now explicit, and two authorities for one arrangement is the
+    // argument this rewrite exists to end.
+    delete config.max_visible;
+    delete config.layout;
+
+    const columns = readText(root, "columns");
+    if (columns === "" || columns === null || columns === undefined) {
+      delete config.columns;
     } else {
-      delete config.max_visible;
+      config.columns = columns === "auto" ? "auto" : parseInt(columns, 10);
     }
+    setIntOrDelete(config, "rows", readText(root, "rows"));
+    setIntOrDelete(config, "max_rows", readText(root, "max_rows"));
+    setIntOrDelete(config, "max_tile_width", readText(root, "max_tile_width"));
+
     config.aspect_ratio = readText(root, "aspect_ratio") || DEFAULT_ASPECT;
-    config.height = parseInt(readText(root, "height"), 10) || DEFAULT_HEIGHT;
+    const height = parseInt(readText(root, "height"), 10);
+    if (Number.isInteger(height) && height > 0) {
+      config.height = height;
+    } else {
+      delete config.height;
+    }
     config.quality = readText(root, "quality") || "auto";
     config.show_names = readBool(root, "show_names");
     setBoolOrDelete(config, "show_boxes", readBool(root, "show_boxes"));
@@ -1251,6 +1503,16 @@ class CamstackGridCardEditor extends HTMLElement {
     this.dispatchEvent(
       new CustomEvent("config-changed", { detail: { config }, bubbles: true, composed: true })
     );
+  }
+}
+
+/** Write an integer field, or drop the key when the control is not on screen. */
+function setIntOrDelete(config, key, raw) {
+  const n = parseInt(raw, 10);
+  if (Number.isInteger(n)) {
+    config[key] = n;
+  } else {
+    delete config[key];
   }
 }
 

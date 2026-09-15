@@ -339,29 +339,74 @@ def test_contract_matches_the_viewer_source() -> None:
     )
 
 
-# --- the grid card's horizontal scrolling -----------------------------------
+# --- the grid card's arrangement --------------------------------------------
 
 
-def test_the_grid_card_can_cap_what_is_visible_and_scroll() -> None:
-    """Cap what is visible, scroll to the rest — and only one authority for it.
+def test_the_grid_card_has_one_control_for_the_arrangement() -> None:
+    """One control decides the arrangement, and each answer owns its fields.
 
-    The embed fits every tile into its box and never scrolls (there is no
-    `overflow` in `EmbedGridPage`). So the scroller is the HOST's, and the cap
-    DRIVES the embed's own column count rather than competing with it.
+    What this replaces: `max_visible` and `layout` used to disable each other
+    and each said so in its own label ("not used while the wall scrolls", "used
+    when shape is fixed"). Four controls were always on screen and the operator
+    had to hold a state machine to know which two were live.
+
+    A mode-specific field must NOT be rendered unconditionally — a greyed-out
+    control is still a control you can misread, and this test is what stops the
+    next edit from quietly putting them all back on screen.
     """
     source = _read(GRID_CARD)
     editor = _editor_source(source, "CamstackGridCardEditor")
     controls = _controls(editor)
-    assert controls.get("max_visible") == "selectField", (
-        "the grid editor has no `max_visible` choice"
+    assert controls.get("layout_mode") == "selectField", (
+        "the grid editor has no arrangement control"
     )
-    assert "_scrollGeometry(" in source, "nothing computes the scroll geometry"
-    assert "overflow-x:auto" in source, "the card never scrolls horizontally"
-    # One authority: with a cap in force the embed is told to lay ONE row of
-    # every tile, so the host's scroller and the embed's layout cannot disagree.
-    assert re.search(r"_layout\(deviceIds\)", source), (
-        "`_layout` no longer sees the device list, so it cannot derive the strip"
+    for legacy in ("max_visible", "layout"):
+        assert legacy not in controls, (
+            f"`{legacy}` is still a control — it is legacy, read only to derive "
+            "a mode for a dashboard written before `layout_mode` existed"
+        )
+    # The mode-specific fields live behind `_modeFields`, never inline in
+    # `_render`. `_editor_source` runs to the end of the module, so asking
+    # `_controls` would see them wherever they are declared — the question that
+    # separates "behind a mode" from "always on screen" is which METHOD renders
+    # them, so that is what this reads.
+    assert "_modeFields()" in editor, "no per-mode field set"
+    render_start = editor.index("  _render() {")
+    render = editor[render_start : editor.index("\n  }\n", render_start)]
+    for key in ("max_tile_width", "max_rows", "columns", "rows"):
+        assert f'"{key}"' not in render, (
+            f"`{key}` is rendered inline in `_render`, so it is on screen in "
+            "every mode — it belongs to one mode only, behind `_modeFields`"
+        )
+    assert '"layout_mode"' in render, "the arrangement control is not unconditional"
+
+
+def test_the_grid_card_scrolls_rows_not_a_strip() -> None:
+    """The wall scrolls VERTICALLY, and one authority decides the geometry.
+
+    The embed fits every tile into its box and never scrolls (there is no
+    `overflow` in `EmbedGridPage`). So the scroller is the HOST's, and the plan
+    DRIVES the embed's own column count rather than competing with it.
+
+    Vertical because a wall of rows scrolls that way, and because the cap the
+    operator sets is "how many ROWS before it scrolls" — which the old one-row
+    horizontal strip could not express at all.
+    """
+    source = _read(GRID_CARD)
+    assert "planGrid(" in source, "nothing computes the wall geometry"
+    assert "overflow-y:auto" in source, "the wall never scrolls vertically"
+    assert "overflow-x:auto" not in source, (
+        "the one-row horizontal strip is back — `max_rows` cannot be said in it"
     )
+    # One authority: the embed is told the plan's column count, so the host's
+    # scroller and the embed's layout cannot disagree about the wall's shape.
+    assert re.search(r"_plan\(deviceIds\)\.columns", source), (
+        "`_layout` no longer returns the plan's columns, so the scroller and "
+        "the embed can lay the wall out differently"
+    )
+    # `flow` caps a tile's width in px, which is only knowable from the card's
+    # measured width — a breakpoint guess would be a promise it cannot keep.
+    assert "ResizeObserver" in source, "the card never measures its own width"
 
 
 def test_every_wall_option_rides_the_open_channel() -> None:

@@ -270,6 +270,10 @@ async function run() {
     // ── the grid card: the cap, and the open channel ──────────────────────
     await page.evaluate(() => {
       const card = document.createElement("camstack-grid-card");
+      // The LEGACY pair, deliberately: a dashboard written before
+      // `layout_mode` must keep working without being rewritten. `max_visible:
+      // 2` meant "two across, one row, the rest scrolls" — which is `fixed`
+      // with two columns and one row.
       card.setConfig({ entities: window.__entities, max_visible: 2, layout: 3 });
       document.body.appendChild(card);
       card.hass = window.__makeHass();
@@ -284,8 +288,10 @@ async function run() {
     const seeded = await page.evaluate(
       () => window.__spy.find((m) => m.type === "embed-config").config
     );
-    check("a capped wall is seeded as ONE row of every camera", () => {
-      assert.equal(seeded.layout, 6);
+    check("a legacy capped wall is seeded as the columns it capped at", () => {
+      // Two columns, not one row of six: the wall now scrolls DOWN through
+      // rows of two, which is the direction a wall of rows scrolls.
+      assert.equal(seeded.layout, 2);
       assert.deepEqual(seeded.devices, [1, 2, 3, 4, 5, 6]);
     });
 
@@ -293,15 +299,28 @@ async function run() {
       const root = document.querySelector("camstack-grid-card").shadowRoot;
       const frame = root.querySelector("iframe");
       frame.dataset.stamp = "original";
+      const scroller = root.querySelector('[data-scroller="wall"]');
       return {
-        scroller: root.querySelector('[data-scroller="wall"]').style.cssText,
+        scroller: scroller.style.cssText,
         frame: frame.style.cssText,
+        // The browser folds `overflow-y:auto;overflow-x:hidden` into the
+        // shorthand `overflow: hidden auto`, so the inline text is not a
+        // reliable place to ask the question. The computed value is.
+        overflowY: getComputedStyle(scroller).overflowY,
+        overflowX: getComputedStyle(scroller).overflowX,
       };
     });
-    check("the host scrolls horizontally, in the shape of the strip", () => {
-      assert.match(styled.scroller, /overflow(-x)?: ?auto/);
-      assert.match(styled.frame, /width: ?300%/);
-      assert.match(styled.frame, /aspect-ratio: ?96 ?\/ ?9/);
+    check("the host scrolls DOWN, and the wall behind is taller than the box", () => {
+      assert.equal(styled.overflowY, "auto");
+      assert.notEqual(styled.overflowX, "auto");
+      // Full width — the wall no longer overflows sideways at all.
+      assert.match(styled.frame, /width: ?100%/);
+      // Three rows of two behind a one-row viewport: the frame is the taller
+      // of the two, and a pixel height (not an aspect) is what says so.
+      const wall = Number(/height: ?([\d.]+)px/.exec(styled.frame)?.[1]);
+      const box = Number(/height: ?([\d.]+)px/.exec(styled.scroller)?.[1]);
+      assert.ok(wall > box, `wall ${wall}px is not taller than the box ${box}px`);
+      assert.ok(Math.abs(wall / box - 3) < 0.05, `rows ratio ${wall / box}, expected 3`);
     });
 
     // Lift the cap: the wall goes back to the operator's own column count, and

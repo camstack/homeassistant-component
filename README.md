@@ -324,7 +324,7 @@ title: Ingresso
 entities:
   - camera.videocamera_ingresso
   - camera.videocamera_giardino
-layout: auto
+layout_mode: fit
 aspect_ratio: "16:9"
 ```
 
@@ -333,35 +333,68 @@ aspect_ratio: "16:9"
 | `entities` | — | CamStack camera entities, in tile order. Their Home Assistant names caption the tiles |
 | `device_ids` | — | Hub device ids, when a camera has no entity. `entities` wins if both are set |
 | `title` | — | `ha-card` header |
-| `layout` | `auto` | `auto`, or a fixed column count (1–12). Not used while the wall scrolls |
-| `max_visible` | — | How many cameras are on screen at once. The rest scroll **horizontally**. See below |
-| `aspect_ratio` | `16:9` | `16:9`, `4:3`, `3:2`, `1:1`, or `none` to use `height` |
-| `height` | `400` | Card height in pixels, used when `aspect_ratio: none` |
+| `layout_mode` | `fit` | How the wall is arranged: `fit`, `flow` or `fixed`. See below |
+| `columns` | `auto` / `3` | `fit`: `auto` or a column count. `fixed`: the column count |
+| `rows` | `2` | `fixed` only — rows visible before the wall scrolls |
+| `max_tile_width` | `480` | `flow` only — the widest a single camera may get, in px |
+| `max_rows` | `2` | `flow` only — rows visible before the wall scrolls |
+| `aspect_ratio` | `16:9` | Shape of one camera: `16:9`, `4:3`, `3:2`, `1:1`. In `fit` also `none`, to use `height` |
+| `height` | `400` | Card height in px. `fit` with `aspect_ratio: none` only |
 | `quality` | `auto` | `auto`, `high`, `mid`, `low` |
 | `show_names` | `true` | Overlay the camera name on each tile |
 | `show_boxes` | `false` | Live detection boxes |
 | `active_only` | `false` | Only cameras currently active |
 | `url_base` | — | Override the hub address. Leave empty: the card asks the integration |
 
-#### Showing a few cameras and scrolling to the rest
+#### Arranging the wall
 
-`max_visible: 4` on a wall of twelve cameras shows four, and the other eight are
-one horizontal scroll away.
+One control decides it, and each answer owns its own fields — so the settings
+in front of you are the ones that are actually in force.
+
+| `layout_mode` | What it does | Its fields |
+| --- | --- | --- |
+| `fit` | Every camera on screen, nothing scrolls. The wall shrinks to fit | `columns`, `aspect_ratio` |
+| `flow` | No camera wider than `max_tile_width`; as many columns as fit across the card, `max_rows` of them visible, the rest scrolls | `max_tile_width`, `max_rows`, `aspect_ratio` |
+| `fixed` | Exactly `columns` × `rows` visible, the rest scrolls | `columns`, `rows`, `aspect_ratio` |
+
+```yaml
+# a hall wall, everything at a glance
+layout_mode: fit
+
+# twelve cameras: two big rows, the rest a scroll away
+layout_mode: flow
+max_tile_width: 480
+max_rows: 2
+
+# a kitchen tablet
+layout_mode: fixed
+columns: 2
+rows: 2
+```
+
+`flow` is a statement about **pixels on the glass**, so the card measures its own
+width and re-derives the column count when the dashboard column, the sidebar or
+the phone's orientation changes it. It restyles the frame; it never rebuilds it.
 
 The scroller is the CARD's, not the embed's: the embed fits every tile into the
-box it is handed and has no scrolling of its own. So with a cap in force the
-card makes the frame `total / max_visible` times as wide as itself, and asks the
-embed for a **single row of every camera** — which is why `layout` is then not
-consulted. Two column controls that disagree would be worse than one, and the
-tile size is exactly one `max_visible`th of the card's width either way. The
-card's shape follows from the cap for the same reason, so `aspect_ratio` and
-`height` are ignored while it scrolls. A cap that is not reached (four cameras,
-`max_visible: 4`) changes nothing at all.
+box it is handed and has no scrolling of its own. So when a wall is taller than
+what should be on screen, the card gives the frame the full wall's height and
+shows a `max_rows`-tall window onto it. The wall scrolls **down**, which is the
+direction a wall of rows scrolls and the direction a wheel and a thumb already
+go. That is also why `aspect_ratio` shapes one CAMERA and not the card: with a
+cap in force the card's own shape is a consequence of the cap, and two controls
+for one shape is an argument this card refuses to have.
 
-Changing any of this — the cap, the columns, the quality, the camera list —
-reaches the wall over the embed's open command channel and **does not restart
-the streams**. Before 0.5.18 a touch of the card editor rebuilt the iframe,
-which renegotiates every WebRTC session on the wall.
+**Upgrading:** a card written before `layout_mode` keeps working untouched.
+`max_visible: N` meant "N across, one row, the rest scrolls sideways" and is
+read as `fixed` with N columns and one row — the same cameras on screen, the
+same rest-scrolls, now downwards. Open the card editor once and it is rewritten
+explicitly.
+
+Changing any of this — the arrangement, the columns, the quality, the camera
+list — reaches the wall over the embed's open command channel and **does not
+restart the streams**. Before 0.5.18 a touch of the card editor rebuilt the
+iframe, which renegotiates every WebRTC session on the wall.
 
 #### What the tile buttons do
 
