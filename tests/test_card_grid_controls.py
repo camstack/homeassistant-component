@@ -33,9 +33,11 @@ from pathlib import Path
 
 import pytest
 
-ASSET_DIR = Path(__file__).parent.parent / "custom_components" / "camstack" / "frontend"
+COMPONENT_DIR = Path(__file__).parent.parent / "custom_components" / "camstack"
+ASSET_DIR = COMPONENT_DIR / "frontend"
 GRID_CARD = ASSET_DIR / "camstack-grid-card.js"
 GRID_CONTROLS = ASSET_DIR / "camstack-grid-controls.js"
+EMBED_TOKEN = COMPONENT_DIR / "embed_token.py"
 
 # The viewer's APP source (`src/`), not its embed bundle — the bar, the trigger
 # rows and the responsive rules all live there. Same override and the same
@@ -248,34 +250,122 @@ def test_the_highlight_rides_the_open_channel() -> None:
 # --- 3. the mic -------------------------------------------------------------
 
 
-def test_the_mic_is_refused_with_its_reason_and_never_faked() -> None:
-    """Talk-back cannot work behind this card's credential, and says so.
+# The four states the talk control can be in, and the gate each one names.
+# They exist separately because each has a DIFFERENT fix, and because
+# not-yet-known must never be drawn as not-granted (D315).
+TALK_STATES = ("granted", "off", "declined", "unknown")
 
-    The embed's tile draws a talk disc on every camera (`GridTilePlayer.tsx`),
-    and the hub's share-token perimeter excludes `intercom.*` from the
-    `grid-view` scope on purpose — which is the only scope this integration
-    mints. So the button exists and cannot work.
 
-    A control shown disabled WITH the reason is the honest answer. Hiding it
-    would make a capability the operator knows the app has look like it does not
-    exist; wiring it up would be a failure at the hub with no explanation.
+def test_the_talk_control_names_which_gate_refused_it() -> None:
+    """Never hidden, never live-but-broken, and never blaming the wrong gate.
+
+    Talk-back rides an opt-in `talk` flag on the hub's share-token scope. Who
+    may ask for it is the INTEGRATION's option — see
+    `test_only_the_entry_option_grants_talk_back`. So a refusal has three
+    possible authors and a fourth state for "nobody has answered yet"; telling
+    an operator to turn on an option while the truth is that no mint has come
+    back sends them looking in the wrong place.
     """
     source = _read(GRID_CONTROLS)
-    reason = re.search(
-        r"MIC_UNAVAILABLE_REASON\s*=\s*(?P<body>(?:\s*\"[^\"]*\"\s*\+?)+);", source
-    )
-    assert reason is not None, "the mic has no reason to give"
-    text = " ".join(re.findall(r'"([^"]*)"', reason.group("body")))
-    for word in ("grid-view", "intercom"):
-        assert word in text, f"the mic's reason does not name `{word}`: {text}"
+    block = re.search(r"TALK_REASONS = \{(?P<body>.*?)\n\};", source, re.S)
+    assert block is not None, "the talk control has no reasons to give"
+    for state in TALK_STATES:
+        assert re.search(rf"^\s*{state}:", block.group("body"), re.M), (
+            f"`{state}` has no reason; a refusal with no author is a dead button"
+        )
 
-    assert 'disabled: true, title: MIC_UNAVAILABLE_REASON' in source, (
-        "the mic rows are not disabled with their reason"
+    # The `off` reason must send the operator to the INTEGRATION's option, not
+    # to the card — the card cannot grant it.
+    reasons = block.group("body")
+    off = re.search(r"off:(?P<body>.*?)\n  \w+:", reasons, re.S)
+    assert off is not None
+    assert "integration" in off.group("body"), (
+        "the refusal does not name the integration option, which is the only "
+        "thing that can grant talk-back"
     )
-    # Never shown as live, and never asked for: `setActiveMic` is a real embed
-    # command, and sending it would open a session the hub refuses.
+    # …and the `unknown` reason must NOT, or not-yet-known reads as off.
+    unknown = re.search(r"unknown:(?P<body>.*)", reasons, re.S)
+    assert unknown is not None
+    assert "Turn on" not in unknown.group("body"), (
+        "not-yet-known tells the operator to flip an option that may not exist"
+    )
+
+    # Unknown is its own answer, folded into neither.
+    start = source.index("export function talkState(")
+    body = source[start : source.index("\n}", start)]
+    assert "granted === null" in body and "undefined" in body, (
+        "an unanswered mint is being folded into `off`"
+    )
+
+    assert "disabled: refused, title: reason" in source, (
+        "the talk rows are not disabled with their reason"
+    )
+    # The card holds no mic session of its own — the TILE's button does — so it
+    # must never send the embed's `setActiveMic`, which would claim one.
     assert "setActiveMic" not in source and "setActiveMic" not in _read(GRID_CARD), (
-        "the card asks the embed for a mic session it cannot have"
+        "the card claims a mic session it does not own"
+    )
+
+
+def test_only_the_entry_option_grants_talk_back() -> None:
+    """A dashboard edit must not hand anybody the microphone of the house.
+
+    The mint endpoint is `requires_auth` with no admin gate — the operator's
+    decision — and a Lovelace config is editable by anyone who can edit a
+    dashboard. So the grant is the config ENTRY's option and the card may only
+    restrict it. The behaviour is proven in `tests/test_embed_token.py`; this is
+    the guard that the shape does not quietly invert.
+    """
+    mint = _read(EMBED_TOKEN)
+    assert "CONF_TALK_ENABLED" in mint, "the mint never reads the entry's option"
+    start = mint.index("def async_talk_allowed(")
+    body = mint[start : mint.index("\n\n\nclass ", start)]
+    assert "entry.options.get(CONF_TALK_ENABLED" in body, (
+        "the option is not read from `options`, so an existing entry would need "
+        "a migration to answer at all"
+    )
+    assert "DEFAULT_TALK_ENABLED" in body, "the default is not the named one"
+
+    # AND, never OR: the option grants and the card narrows.
+    granted = re.search(
+        r"granted = \(\s*talk is True(?P<body>.*?)\)\n", mint, re.S
+    )
+    assert granted is not None, "the card's ask and the entry's option are not ANDed"
+    assert "async_talk_allowed" in granted.group("body")
+
+    # Absent, never `false`: the hub's schema says absent means off, and a
+    # payload that changed shape for every caller would break the compat story.
+    assert '**({"talk": True} if talk else {})' in mint, (
+        "the scope sends `talk` unconditionally"
+    )
+
+
+def test_a_talking_token_is_not_interchangeable_with_a_silent_one() -> None:
+    """`talk` belongs in the cache key AND in the grant key.
+
+    Two tokens for the same cameras are different CREDENTIALS when one of them
+    can speak into the house. The cache is keyed per (entry, kind, device ids)
+    so a re-rendering card does not mint per render — add talk-back without
+    touching that key and the first mint of a scope is served to every later
+    request for it, in both directions.
+    """
+    mint = _read(EMBED_TOKEN)
+    assert "key = (entry_id, kind, tuple(device_ids), talk)" in mint, (
+        "the token cache cannot tell a talking token from a silent one"
+    )
+    assert '"talk" if key[3] else "no-talk"' in mint, (
+        "the same-origin grant cannot tell them apart, so the relay would "
+        "inject whichever token was issued last"
+    )
+    # The card's own token cache has the same split, or it keeps a stale one
+    # after it changes its mind.
+    card = _read(GRID_CARD)
+    assert '_talkAsked() ? "talk" : "no-talk"' in card, (
+        "the card reuses a token minted for a different talk-back answer"
+    )
+    # And the card reads what it GOT, never what it asked for.
+    assert 'typeof result.talk === "boolean" ? result.talk : null' in card, (
+        "the card assumes the grant it asked for"
     )
 
 

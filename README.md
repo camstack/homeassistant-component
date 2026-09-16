@@ -345,6 +345,7 @@ aspect_ratio: "16:9"
 | `show_boxes` | `false` | Live detection boxes |
 | `active_only` | `false` | Only cameras currently active |
 | `show_controls` | `true` | The control bar under the wall |
+| `talk` | `true` | Ask for talk-back on this card's viewing token. A card can only DECLINE (`talk: false`); the grant is the integration's option |
 | `highlight` | `false` | Light a border on the cameras that are doing something |
 | `highlight_motion` | `true` | `highlight` only — motion lights the border |
 | `highlight_audio` | `off` | `highlight` only — `off`, `low`, `mid`, `high` |
@@ -438,11 +439,39 @@ Two things about it differ from the app, on purpose:
   rendered card cannot write that. So the bar starts from the card's settings and
   a press lasts until the dashboard is reloaded. Set the value you want to KEEP
   in the card editor.
-* **Talk is shown disabled, with the reason.** Talk-back goes through the hub's
-  `intercom` capability, and the share token this integration mints for a card
-  (`grid-view`) deliberately does not grant it. The button is not hidden — the
-  app has the feature and you should be told why this surface does not — and it
-  is never shown as live. Use the CamStack app to talk to a camera.
+* **Talk names the gate that refused it.** See below.
+
+#### Talk-back
+
+Off until you turn it on, in **Settings → Devices & services → CamStack →
+Configure → "Allow talk-back"**. That switch is the only thing that grants it.
+
+It is not a card setting, and that is the point: a Lovelace config can be edited
+by anyone who can edit a dashboard, and the endpoint that mints a card's viewing
+token is open to every authenticated Home Assistant user (no separate admin
+check — the operator's decision). A tick box on a card alone would therefore
+mean that editing a dashboard hands you the microphone of the house. A card can
+only **decline** what the integration allows, with `talk: false`.
+
+How it travels: the hub's share tokens carry an opt-in `talk` flag on their
+scope. A `grid-view` token minted with it may call three named methods —
+`intercom.startTalkSession`, `intercom.pushTalkAudio`, `intercom.endTalkSession`
+— and only for the cameras the token already carries. The flag widens **what**
+may be called, never **which** cameras, and it is asked for at mint time so a
+link handed out last week does not acquire talk-back because a feature shipped.
+
+The card's talk control is never hidden and never shown as live-but-broken. It
+says which gate refused it, because each has a different fix:
+
+| It says | What to do |
+| --- | --- |
+| Talk-back is enabled for this card | Press talk on a camera |
+| Talk-back is off for this CamStack integration | Turn it on in the integration's options |
+| This card asked for a token without talk-back | Remove `talk: false` from the card |
+| Talk-back has not been answered for yet | Wait for the card's token, or update the integration |
+
+Turning the option on or off takes effect without restarting Home Assistant —
+the entry reloads itself and the cards re-mint.
 
 Per-camera **audio, play/pause and talk** are drawn by the player itself, on each
 tile, and have been since the card learned to answer the embed's tile intents.

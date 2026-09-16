@@ -81,11 +81,13 @@
           "panel_enabled": "Show CamStack in the sidebar",
           "panel_title": "Sidebar title",
           "panel_icon": "Sidebar icon",
-          "panel_url": "Panel URL override"
+          "panel_url": "Panel URL override",
+          "talk_enabled": "Allow talk-back (speak through a camera)"
         },
         "data_description": {
           "panel_icon": "Any Material Design Icons name, for example mdi:cctv.",
-          "panel_url": "Leave empty to use the configured hub address."
+          "panel_url": "Leave empty to use the configured hub address.",
+          "talk_enabled": "Off by default. When on, ANY Home Assistant user who can see a CamStack card can speak through the cameras that card shows — there is no separate admin check. A card can decline talk-back, but no dashboard setting can grant it."
         }
       }
     }

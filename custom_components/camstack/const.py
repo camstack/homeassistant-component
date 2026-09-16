@@ -40,12 +40,30 @@ CONF_PANEL_TITLE: Final = "panel_title"
 CONF_PANEL_ICON: Final = "panel_icon"
 CONF_PANEL_URL: Final = "panel_url"
 
+# Talk-back (intercom) through a card's share token.
+#
+# THE AUTHORITY, and deliberately not a card option. A Lovelace card's config is
+# editable by anyone who can edit a dashboard, and the mint endpoint is open to
+# every authenticated Home Assistant user (`requires_auth`, no admin gate, the
+# same surface as the sidebar panel). A tick box on the card alone would
+# therefore mean that editing a dashboard grants you the microphone of the
+# house. So the entry owns it and a card may only RESTRICT it.
+#
+# In `options`, never in `data`: every existing entry then reads it as
+# `options.get(CONF_TALK_ENABLED, DEFAULT_TALK_ENABLED)` with no migration, no
+# `CONFIG_ENTRY_VERSION` bump and no re-init, and the update listener that
+# already exists (`add_update_listener` -> `async_reload`) makes a change take
+# effect without restarting Home Assistant. Same shape as `CONF_PANEL_ENABLED`.
+CONF_TALK_ENABLED: Final = "talk_enabled"
+
 # The only key the panel-only component ever stored.
 LEGACY_CONF_URL_BASE: Final = "url_base"
 
 DEFAULT_PORT: Final = 4443
 DEFAULT_VERIFY_SSL: Final = False
 DEFAULT_PANEL_ENABLED: Final = True
+# OFF. Speaking into the home is not something an upgrade turns on for you.
+DEFAULT_TALK_ENABLED: Final = False
 DEFAULT_PANEL_TITLE: Final = "CamStack"
 DEFAULT_PANEL_ICON: Final = "mdi:cctv"
 

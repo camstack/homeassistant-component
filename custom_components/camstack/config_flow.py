@@ -44,12 +44,14 @@ from .const import (
     CONF_PANEL_ICON,
     CONF_PANEL_TITLE,
     CONF_PANEL_URL,
+    CONF_TALK_ENABLED,
     CONF_VERIFY_SSL,
     CONFIG_ENTRY_VERSION,
     DEFAULT_PANEL_ENABLED,
     DEFAULT_PANEL_ICON,
     DEFAULT_PANEL_TITLE,
     DEFAULT_PORT,
+    DEFAULT_TALK_ENABLED,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
 )
@@ -299,12 +301,12 @@ class CamStackConfigFlow(
 
 
 class CamStackOptionsFlow(OptionsFlow):
-    """Settings for the sidebar panel. The hub address is not among them."""
+    """Settings for the sidebar panel and for talk-back. Not the hub address."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Edit the panel settings."""
+        """Edit the panel settings and the talk-back grant."""
         if user_input is not None:
             panel_url = str(user_input.get(CONF_PANEL_URL) or "").strip()
             return self.async_create_entry(
@@ -332,6 +334,16 @@ class CamStackOptionsFlow(OptionsFlow):
                         CONF_PANEL_URL,
                         default=options.get(CONF_PANEL_URL, ""),
                     ): str,
+                    # The authority for talk-back, and the only one. A card can
+                    # decline it; nothing on a dashboard can grant it. Off until
+                    # somebody comes here and says otherwise — every
+                    # authenticated Home Assistant user can then use it, which
+                    # is the operator's decision and is what the description in
+                    # `strings.json` says out loud.
+                    vol.Required(
+                        CONF_TALK_ENABLED,
+                        default=options.get(CONF_TALK_ENABLED, DEFAULT_TALK_ENABLED),
+                    ): bool,
                 }
             ),
         )

@@ -19,6 +19,7 @@ from custom_components.camstack.const import (
     CONF_PANEL_ICON,
     CONF_PANEL_TITLE,
     CONF_PANEL_URL,
+    CONF_TALK_ENABLED,
     CONFIG_VIEW_URL,
     PANEL_URL_PATH,
 )
@@ -137,6 +138,42 @@ async def test_the_options_flow_renames_the_sidebar_and_never_asks_for_an_addres
     assert panel(hass).sidebar_title == "Videosorveglianza"
     # An empty override still derives, rather than blanking the panel.
     assert panel(hass).config["url"] == "https://192.168.1.9:4443"
+
+
+async def test_talk_back_is_an_entry_option_and_it_starts_off(
+    hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
+) -> None:
+    """The one authority for talk-back is here, not on a card.
+
+    A Lovelace config is editable by anyone who can edit a dashboard and the
+    mint endpoint is open to every authenticated user, so a tick box on a card
+    alone would mean that editing a dashboard grants you the microphone of the
+    house. It lives in `options` rather than `data` so an entry created before
+    it existed reads the default with no migration and no re-init, and the
+    update listener that already reloads the entry makes a change take effect
+    without restarting Home Assistant.
+    """
+    await setup_integration(hass, config_entry)
+
+    result = await hass.config_entries.options.async_init(config_entry.entry_id)
+    schema = result["data_schema"].schema
+    key = next(k for k in schema if str(k) == CONF_TALK_ENABLED)
+    assert key.default() is False, "talk-back is on by default"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_PANEL_ENABLED: True,
+            CONF_PANEL_TITLE: "CamStack",
+            CONF_PANEL_ICON: "mdi:cctv",
+            CONF_PANEL_URL: "",
+            CONF_TALK_ENABLED: True,
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert config_entry.options[CONF_TALK_ENABLED] is True
 
 
 async def test_unloading_the_entry_takes_the_panel_down(

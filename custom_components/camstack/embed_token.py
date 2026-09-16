@@ -53,8 +53,11 @@ from homeassistant.util import dt as dt_util
 
 from .api import CamStackError
 from .const import (
+    CONF_TALK_ENABLED,
+    DEFAULT_TALK_ENABLED,
     DOMAIN,
     EMBED_TOKEN_VIEW_URL,
+    SHARE_SCOPE_GRID,
     SHARE_SCOPE_KINDS,
     SHARE_SCOPE_MAX_DEVICES,
     SHARE_TOKEN_MUTATION,
@@ -142,6 +145,25 @@ def async_exported_camera_ids(hass: HomeAssistant, entry_id: str) -> set[int]:
     return {device.device_id for device in data.cameras()}
 
 
+def async_talk_allowed(hass: HomeAssistant, entry_id: str) -> bool:
+    """Does THIS entry allow talk-back through a card's share token?
+
+    The one authority (D62's rule applied to an integration-wide function: the
+    switch stores nothing of its own, it reads the thing that already owns the
+    function). A card may decline talk-back; nothing on a dashboard can grant
+    it, because a Lovelace config is editable by anyone who can edit a
+    dashboard and this endpoint is open to every authenticated user.
+
+    Read from `options` with a default, so an entry created before the key
+    existed answers `False` without a migration — and an operator's change takes
+    effect through the update listener that already reloads the entry.
+    """
+    entry = hass.config_entries.async_get_entry(entry_id)
+    if entry is None:
+        return False
+    return bool(entry.options.get(CONF_TALK_ENABLED, DEFAULT_TALK_ENABLED))
+
+
 class CamStackEmbedTokenView(HomeAssistantView):
     """Hands a card a hub share token for the cameras it is configured with."""
 
@@ -190,6 +212,17 @@ class CamStackEmbedTokenView(HomeAssistantView):
         if direct is not None and not isinstance(direct, bool):
             return self.json_message("direct must be a boolean", 400)
 
+        # Talk-back. The card ASKS; the entry's option decides. A card that asks
+        # while the option is off is not an error — it is a card whose operator
+        # has not turned talk-back on, and refusing the whole mint over it would
+        # take the WALL down (no video at all) to withhold a microphone. So the
+        # token is minted without talk and the answer SAYS so, which is what
+        # lets the card draw its talk control disabled with the right reason
+        # instead of a button that fails at the hub.
+        talk = body.get("talk")
+        if talk is not None and not isinstance(talk, bool):
+            return self.json_message("talk must be a boolean", 400)
+
         entry_id = body.get("entry_id")
         if entry_id is None:
             entries = hass.config_entries.async_entries(DOMAIN)
@@ -212,8 +245,17 @@ class CamStackEmbedTokenView(HomeAssistantView):
                 f"CamStack does not export these devices as cameras: {unknown}", 400
             )
 
+        # AND, never OR: the option is the grant and the card can only narrow
+        # it. Talk is also meaningless on an events token — that perimeter has
+        # no camera to speak through — so it is confined to the grid kind here
+        # rather than relying on the hub to ignore it.
+        granted = (
+            talk is True
+            and kind == SHARE_SCOPE_GRID
+            and async_talk_allowed(hass, entry_id)
+        )
         return await self._async_answer(
-            hass, entry_id, kind, device_ids, direct is True
+            hass, entry_id, kind, device_ids, direct is True, granted
         )
 
     async def _async_answer(
@@ -223,10 +265,17 @@ class CamStackEmbedTokenView(HomeAssistantView):
         kind: str,
         device_ids: list[int],
         direct: bool,
+        talk: bool,
     ) -> web.Response:
         """Return a cached token, or mint one and cache it."""
         cache = _cache(hass)
-        key = (entry_id, kind, tuple(device_ids))
+        # `talk` is part of the KEY, not a detail of the answer: two tokens for
+        # the same cameras are different credentials when one of them can speak
+        # into the house. Without it the first mint of a scope would be handed
+        # back to every later request for it — a card that never asked for
+        # talk-back would be given a talking token, and a card that did would be
+        # given a silent one and look broken.
+        key = (entry_id, kind, tuple(device_ids), talk)
         now = dt_util.utcnow().timestamp()
         cached = cache.get(key)
         if cached is not None and cached.is_usable(now):
@@ -238,7 +287,16 @@ class CamStackEmbedTokenView(HomeAssistantView):
             return self.json_message("the CamStack entry is not loaded", 503)
 
         payload = {
-            "scope": {"kind": kind, "deviceIds": device_ids},
+            "scope": {
+                "kind": kind,
+                "deviceIds": device_ids,
+                # OMITTED when off, never sent as `false`: the hub's
+                # `ShareTokenScopeSchema` says absent means off, and a payload
+                # that changed shape for every caller would make an older hub's
+                # answer impossible to reason about. The flag widens WHAT may be
+                # called, never WHICH cameras — `deviceIds` still gates it.
+                **({"talk": True} if talk else {}),
+            },
             "ttlSec": int(SHARE_TOKEN_TTL.total_seconds()),
         }
         try:
@@ -260,7 +318,7 @@ class CamStackEmbedTokenView(HomeAssistantView):
 def _answer(
     hass: HomeAssistant,
     entry_id: str,
-    key: tuple[str, str, tuple[int, ...]],
+    key: tuple[str, str, tuple[int, ...], bool],
     minted: MintedToken,
     direct: bool,
 ) -> dict[str, Any]:
@@ -276,7 +334,11 @@ def _answer(
     reported on both paths regardless — it is not a secret, and the card needs
     it to know when to come back for a fresh grant.
     """
-    scope_key = (key[0], key[1], *map(str, key[2]))
+    # The talk flag is in the GRANT's key too, for the same reason it is in the
+    # cache's: the grant id is what the browser carries, and two scopes that
+    # differ only by talk-back sharing one id would mean the relay injecting
+    # whichever of the two tokens was issued last.
+    scope_key = (key[0], key[1], *map(str, key[2]), "talk" if key[3] else "no-talk")
     grant_id = async_issue_grant(
         hass, entry_id, scope_key, minted.token, minted.expires_at
     )
@@ -284,6 +346,11 @@ def _answer(
         **({"token": minted.token} if direct else {}),
         "expires_at": minted.expires_at,
         "proxy_base": proxy_base_for(grant_id),
+        # What the card GOT, not what it asked for. A card that asked and was
+        # refused must be able to say WHY — "the integration has talk-back off"
+        # is an answer an operator can act on; a talk button that fails at the
+        # hub is not.
+        "talk": key[3],
     }
 
 

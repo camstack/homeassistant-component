@@ -98,6 +98,7 @@ const { probeHub, buildUnreachableNotice } = await import(
  */
 const {
   buildControlBar,
+  talkState,
   highlightFromConfig,
   withHighlightDefaults,
   DETECTION_MACRO_CLASSES,
@@ -499,6 +500,13 @@ class CamstackGridCard extends HTMLElement {
     this._sessionShowBoxes = null;
     this._sessionHighlightOn = null;
     this._sessionHighlight = null;
+    /**
+     * Whether the credential this card holds carries talk-back — `true`,
+     * `false`, or `null` for "no mint has answered yet, or the integration is
+     * older than the flag". Three states on purpose: not-yet-known must never
+     * be drawn as not-granted (D315), because the two have different fixes.
+     */
+    this._talkGranted = null;
     this._bar = null;
     this._onMessage = this._onMessage.bind(this);
   }
@@ -813,8 +821,24 @@ class CamstackGridCard extends HTMLElement {
    * ONLY when this card frames the hub directly. `token` is null on the
    * relayed path by design; `proxyBase` is what authorises the frame there.
    */
+  /**
+   * Does this CARD want talk-back on its token?
+   *
+   * A card may only DECLINE. The grant is the integration's option (`talk` in
+   * the entry's options), because a Lovelace config is editable by anyone who
+   * can edit a dashboard and the mint endpoint is open to every authenticated
+   * user — a tick box here alone would mean that editing a dashboard hands you
+   * the microphone of the house. So the card asks, and the entry answers.
+   */
+  _talkAsked() {
+    return this._config.talk !== false;
+  }
+
   async _token_for(deviceIds) {
-    const key = deviceIds.join(",");
+    // The ask is part of the key: a token minted WITH talk-back is a different
+    // credential from one minted without, and the integration caches them
+    // apart. A card that changed its mind must not keep the old one.
+    const key = `${deviceIds.join(",")}|${this._talkAsked() ? "talk" : "no-talk"}`;
     const fresh =
       this._grantKnown &&
       this._tokenKey === key &&
@@ -835,10 +859,19 @@ class CamstackGridCard extends HTMLElement {
         // answer carries no token — see the header.
         ...(this._isDirect() ? { direct: true } : {}),
         ...(this._entryId ? { entry_id: this._entryId } : {}),
+        // Omitted when the card declines, so the request stays byte-identical
+        // to the one a card sent before talk-back existed.
+        ...(this._talkAsked() ? { talk: true } : {}),
       })
       .then((result) => {
         this._token = (result && result.token) || null;
         this._grantKnown = true;
+        // What the token GOT, read from the answer — never assumed from what
+        // was asked. `undefined` (an integration older than this feature) is
+        // not `false`: it is UNKNOWN, and the control says so rather than
+        // blaming an option that may not exist yet.
+        this._talkGranted =
+          result && typeof result.talk === "boolean" ? result.talk : null;
         this._proxyBase =
           result && typeof result.proxy_base === "string" && result.proxy_base
             ? result.proxy_base
@@ -1026,6 +1059,9 @@ class CamstackGridCard extends HTMLElement {
           id,
           name: friendlyName(this._hass, this._entityForDevice(id)) || `Camera ${id}`,
         })),
+      // What talk-back is doing here, derived from the two facts this card has:
+      // what it ASKED the mint for, and what the mint ANSWERED.
+      talkState: () => talkState(this._talkAsked(), this._talkGranted),
       audioOn: (id) => this._audioOnIds.has(id),
       audioCount: () => this._audioOnIds.size,
       toggleAudio: (id) => this._toggleHostSet(this._audioOnIds, id, "setAudioOn"),

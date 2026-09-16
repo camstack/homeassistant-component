@@ -130,25 +130,66 @@ export const LAYOUT_OPTIONS = ["auto", 2, 3, 4];
 export const QUALITY_BADGE = { auto: "A", high: "H", mid: "M", low: "L" };
 
 /**
- * Why the mic is drawn disabled rather than hidden or wired up.
+ * What the talk control says, per state — and why there are FOUR of them.
  *
- * Talk-back goes through the `intercom` capability, and the hub's share-token
- * perimeter names it as deliberately EXCLUDED from the `grid-view` scope:
+ * Talk-back rides on the share token: the hub's `ShareTokenScopeSchema` carries
+ * an opt-in `talk` flag, and a `grid-view` token minted with it may call three
+ * named methods (`intercom.startTalkSession` / `pushTalkAudio` /
+ * `endTalkSession`) — and only for the deviceIds the token already carries. The
+ * flag is asked for at MINT time, never granted retroactively, because a share
+ * link handed to somebody last week must not acquire the microphone of the
+ * house because a feature shipped.
  *
- *   camstack-server/server/backend/src/api/trpc/share-view-access.ts:32
- *   "Intentionally NOT allowlisted: `intercom.*` (talk-back into the home …)"
+ * Who may ask is the INTEGRATION's option, not this card's: a Lovelace config
+ * is editable by anyone who can edit a dashboard and the mint endpoint is open
+ * to every authenticated Home Assistant user, so a tick box here alone would
+ * mean that editing a dashboard grants you the microphone. The card may only
+ * DECLINE.
  *
- * The integration mints exactly that scope for a card (`embed_token.py`), so a
- * mic session opened from this dashboard would be refused by the hub. It is
- * shown anyway, and refused HERE with the reason: hiding it would make a
- * capability the operator knows the app has look like it does not exist, and
- * wiring it up would be a button that fails at the hub with no explanation.
- * Never `active`: this card holds no mic session to be active about.
+ * So the control is never hidden and never shown live-but-broken — it names
+ * which gate said no, because each has a different fix:
+ *
+ *   granted    — the token carries it.
+ *   off        — the integration's option is off. An operator can turn it on.
+ *   declined   — this card asked not to have it (`talk: false`).
+ *   unknown    — no mint has answered yet, or the integration predates the
+ *                flag. NOT the same as `off` (D315): telling somebody to turn
+ *                on an option that does not exist sends them looking in the
+ *                wrong place.
  */
-export const MIC_UNAVAILABLE_REASON =
-  "Talk-back is not available from a Home Assistant dashboard: the viewing " +
-  "token this card is given is a grid-view share scope, and the hub does not " +
-  "grant intercom (talk-back) on it. Use the CamStack app to talk to a camera.";
+export const TALK_REASONS = {
+  granted:
+    "Talk-back is enabled for this card. Press the talk button on a camera to " +
+    "speak through it.",
+  off:
+    "Talk-back is off for this CamStack integration. Turn on \u201cAllow " +
+    "talk-back\u201d in the integration\u2019s options (Settings \u2192 " +
+    "Devices & services \u2192 CamStack \u2192 Configure). It then applies to " +
+    "every Home Assistant user who can see this card.",
+  declined:
+    "This card asked for a viewing token without talk-back (talk: false). " +
+    "Remove that from the card\u2019s settings to use it.",
+  unknown:
+    "Talk-back has not been answered for yet \u2014 the card is still getting " +
+    "its viewing token, or this CamStack integration predates the setting.",
+};
+
+/** The state a card is in when it has no answer about talk-back. */
+export const TALK_UNKNOWN = "unknown";
+
+/**
+ * Resolve the talk state from the two facts the card has: what it ASKED for,
+ * and what the mint ANSWERED. Pure, so the guard can hold it to its table.
+ *
+ * `granted === null` means the question has not been answered — never folded
+ * into `false`, which is the D315 mistake of making not-yet-known look like
+ * not-installed.
+ */
+export function talkState(asked, granted) {
+  if (granted === null || granted === undefined) return TALK_UNKNOWN;
+  if (granted === true) return "granted";
+  return asked ? "off" : "declined";
+}
 
 /** Fill any missing highlight field from the defaults —
  *  `withHighlightDefaults` in `grid-store.ts`. */
@@ -351,13 +392,22 @@ export function buildControlBar(host) {
         ...cameras.map((c) => row(`audio-${c.id}`, c.name, { selected: host.audioOn(c.id) })),
       ];
     },
-    /** Every camera, every row refused, each carrying the reason. */
+    /**
+     * Every camera, and what talk-back is doing on this card.
+     *
+     * The rows are never hidden and never shown as live sessions: talking is
+     * the TILE's button (the embed owns the audio path), and this panel is the
+     * one place that can say whether the credential behind that button carries
+     * talk-back at all. Refused rows carry the gate that refused them.
+     */
     mic: () => {
-      const cameras = host.cameras();
+      const state = host.talkState();
+      const reason = TALK_REASONS[state];
+      const refused = state !== "granted";
       return [
-        note(MIC_UNAVAILABLE_REASON),
-        ...cameras.map((c) =>
-          row(`mic-${c.id}`, c.name, { disabled: true, title: MIC_UNAVAILABLE_REASON })
+        note(reason),
+        ...host.cameras().map((c) =>
+          row(`mic-${c.id}`, c.name, { disabled: refused, title: reason })
         ),
       ];
     },
@@ -552,8 +602,11 @@ export function buildControlBar(host) {
     }
     const mic = controls.get("mic");
     if (mic) {
-      // Never active, always explained — this card holds no mic session.
-      mic.el.title = MIC_UNAVAILABLE_REASON;
+      // Never drawn `active` — this card holds no mic session of its own; the
+      // tile's button does. Always explained, whichever state it is in.
+      const state = host.talkState();
+      mic.el.title = TALK_REASONS[state];
+      mic.el.style.opacity = state === "granted" ? "1" : "0.6";
     }
     const layout = controls.get("layout");
     if (layout) {

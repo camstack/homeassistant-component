@@ -582,10 +582,11 @@ async function run() {
       assert.deepEqual(seen.at(-1), { kind: "setAudioOn", value: [22] });
     });
 
-    // The mic. `intercom.*` is deliberately NOT in the `grid-view` share
-    // scope (`share-view-access.ts`), so talk-back cannot work behind this
-    // card's credential. It must be VISIBLE and refused with the reason —
-    // never hidden, and never shown as if it were live.
+    // The mic, in the state this harness produces: a mint that answered
+    // nothing about talk-back. Whatever the state, the control must be
+    // VISIBLE and carry its reason — never hidden, never shown as if it were
+    // live. The four states and the gate each one names are exercised at the
+    // end of this file.
     await press('[data-action="mic"]');
     const micRow = await bar('[data-row="mic-11"]');
     const micButton = await bar('[data-action="mic"]');
@@ -596,10 +597,8 @@ async function run() {
       assert.ok(micButton, "no mic control in the bar");
       assert.ok(micRow, "the mic popover lists no camera");
       assert.ok(micRow.disabled, "a mic row that cannot work is not disabled");
-      assert.ok(
-        /intercom|share|token|scope/i.test(micRow.title),
-        `the mic row gives no reason: ${micRow.title}`
-      );
+      assert.ok(micRow.title.length > 40, `the mic row gives no reason: ${micRow.title}`);
+      assert.match(micRow.title, /talk-back/i);
     });
     check("a disabled mic row commands nothing", () => {
       assert.equal(seen.length, beforeMic);
@@ -687,6 +686,86 @@ async function run() {
     });
     check("the bar is not rebuilt by a set-hass storm", () => {
       assert.equal(barStamp, "bar", "an open popover would close several times a second");
+    });
+
+    // ── talk-back: four states, four different fixes ────────────────────
+    //
+    // The grant rides the SHARE TOKEN (`scope.talk`), and who may ask is the
+    // integration's option — not this card's config, which anyone who can edit
+    // a dashboard can change. So the card asks and reads the answer; it never
+    // assumes it got what it asked for.
+    const talkPanel = async (config, mintAnswer) =>
+      page.evaluate(
+        async ([cfg, answer]) => {
+          const slot = document.querySelector("camstack-grid-card");
+          slot.remove();
+          const card = document.createElement("camstack-grid-card");
+          card.setConfig({ entities: ["camera.front", "camera.back"], ...cfg });
+          document.body.appendChild(card);
+          // A FRESH hass each time. `window.__makeHass` returns one shared
+          // object by this point in the spec, so wrapping its `callApi` in
+          // place stacks the wrappers: the fourth run's "no answer" was being
+          // served the third run's `talk: false`, which is how this helper
+          // proved the opposite of what it claimed.
+          const hass = { ...window.__makeHass() };
+          window.__baseCallApi = window.__baseCallApi || hass.callApi;
+          const base = window.__baseCallApi;
+          const asked = [];
+          hass.callApi = async (method, apiPath, body) => {
+            if (apiPath === "camstack/embed_token") {
+              asked.push(body);
+              const result = await base(method, apiPath, body);
+              return answer === null ? result : { ...result, talk: answer };
+            }
+            return base(method, apiPath, body);
+          };
+          card.hass = hass;
+          await new Promise((r) => setTimeout(r, 400));
+          const root = card.shadowRoot;
+          const button = root.querySelector('[data-bar="controls"] [data-action="mic"]');
+          button.click();
+          await new Promise((r) => setTimeout(r, 60));
+          const rowEl = root.querySelector('[data-row="mic-11"]');
+          return {
+            asked,
+            title: button.title,
+            rowDisabled: rowEl ? rowEl.disabled : null,
+            rowTitle: rowEl ? rowEl.title : null,
+          };
+        },
+        [config, mintAnswer]
+      );
+
+    const granted = await talkPanel({}, true);
+    check("a card asks for talk-back, and the mint's yes enables the control", () => {
+      assert.equal(granted.asked.at(-1).talk, true, "the card never asked for talk-back");
+      assert.equal(granted.rowDisabled, false, "granted talk-back is still refused");
+      assert.match(granted.title, /enabled for this card/i);
+    });
+
+    const refused = await talkPanel({}, false);
+    check("the mint's no names the INTEGRATION's option, not the card", () => {
+      assert.equal(refused.rowDisabled, true);
+      assert.match(refused.rowTitle, /integration/i);
+      assert.match(refused.rowTitle, /options/i);
+    });
+
+    const declined = await talkPanel({ talk: false }, false);
+    check("a card that declines is told so, and asks for nothing", () => {
+      assert.equal(declined.asked.at(-1).talk, undefined, "a declining card still asked");
+      assert.equal(declined.rowDisabled, true);
+      assert.match(declined.rowTitle, /this card/i);
+    });
+
+    const unknown = await talkPanel({}, null);
+    check("an integration that never answered is UNKNOWN, not off", () => {
+      assert.equal(unknown.rowDisabled, true);
+      assert.doesNotMatch(
+        unknown.rowTitle,
+        /turn on/i,
+        "not-yet-known is telling the operator to flip an option that may not exist"
+      );
+      assert.match(unknown.rowTitle, /not been answered|predates/i);
     });
 
     check("no command was ever posted to a wildcard origin", () => {

@@ -10,6 +10,7 @@ from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
 
 from custom_components.camstack.api import CamStackForbiddenError
 from custom_components.camstack.const import (
+    CONF_TALK_ENABLED,
     EMBED_TOKEN_VIEW_URL,
     SHARE_TOKEN_MUTATION,
     SHARE_TOKEN_TTL,
@@ -30,6 +31,220 @@ def minted(expires_at_ms: int | None = 4_000_000_000_000) -> dict[str, object]:
 async def post(client, body: dict[str, object]):
     """POST a mint request as an authenticated Home Assistant user."""
     return await client.post(EMBED_TOKEN_VIEW_URL, json=body)
+
+
+def allow_talk(hass: HomeAssistant, entry: MockConfigEntry, value: bool) -> None:
+    """Set the entry option that is the ONLY authority for talk-back."""
+    hass.config_entries.async_update_entry(
+        entry, options={**dict(entry.options), CONF_TALK_ENABLED: value}
+    )
+
+
+def scopes(mock_client: AsyncMock) -> list[dict[str, object]]:
+    """Every `scope` the hub was asked to mint, in order."""
+    return [call.args[1]["scope"] for call in mock_client.mutate.await_args_list]
+
+
+# --- talk-back --------------------------------------------------------------
+#
+# The hub carries an opt-in `talk` flag on `ShareTokenScopeSchema`: absent means
+# off, and a `grid-view` token minted WITH it may call three named methods
+# (`intercom.startTalkSession` / `pushTalkAudio` / `endTalkSession`) for the
+# deviceIds it already carries. The flag is asked for at mint time and is never
+# granted retroactively — a share link handed to somebody last week must not
+# acquire the microphone of the house because a feature shipped.
+#
+# On THIS side the question is who may ask, and the answer is the entry's
+# option and nothing else. A Lovelace config is editable by anyone who can edit
+# a dashboard, and this endpoint is open to every authenticated user, so a tick
+# box on a card alone would mean that editing a dashboard grants you the
+# microphone. The card may only decline.
+
+
+async def test_talk_back_is_off_until_the_entry_says_otherwise(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hass_client: ClientSessionGenerator,
+) -> None:
+    """A card cannot grant itself the microphone.
+
+    The default is OFF and no migration is needed to say so: the key is read
+    out of `options` with a default, so an entry created before it existed
+    answers `False` on its own.
+    """
+    await setup_integration(hass, config_entry)
+    mock_client.mutate.reset_mock()
+    mock_client.mutate.return_value = minted()
+    client = await hass_client()
+
+    response = await post(
+        client, {"kind": "grid-view", "device_ids": [EXPORTED], "talk": True}
+    )
+
+    assert response.status == 200
+    # Refused — but the WALL is still minted for. Taking the video down to
+    # withhold a microphone would be a worse answer than saying no to the
+    # microphone.
+    assert (await response.json())["talk"] is False
+    assert scopes(mock_client) == [{"kind": "grid-view", "deviceIds": [EXPORTED]}]
+
+
+async def test_the_entry_option_is_what_grants_talk_back(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hass_client: ClientSessionGenerator,
+) -> None:
+    """With the option on, an asking card gets `talk: true` on its scope."""
+    await setup_integration(hass, config_entry)
+    allow_talk(hass, config_entry, True)
+    await hass.async_block_till_done()
+    mock_client.mutate.reset_mock()
+    mock_client.mutate.return_value = minted()
+    client = await hass_client()
+
+    response = await post(
+        client, {"kind": "grid-view", "device_ids": [EXPORTED], "talk": True}
+    )
+
+    assert response.status == 200
+    assert (await response.json())["talk"] is True
+    assert scopes(mock_client) == [
+        {"kind": "grid-view", "deviceIds": [EXPORTED], "talk": True}
+    ]
+
+
+async def test_a_card_may_decline_talk_back_the_option_allows(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hass_client: ClientSessionGenerator,
+) -> None:
+    """The card can only RESTRICT. A card that does not ask gets a silent token.
+
+    And the scope it produces is byte-identical to the one a card sent before
+    talk-back existed — `talk` is OMITTED, never sent as `false`, because the
+    hub's schema says absent means off.
+    """
+    await setup_integration(hass, config_entry)
+    allow_talk(hass, config_entry, True)
+    await hass.async_block_till_done()
+    mock_client.mutate.reset_mock()
+    mock_client.mutate.return_value = minted()
+    client = await hass_client()
+
+    response = await post(client, {"kind": "grid-view", "device_ids": [EXPORTED]})
+
+    assert (await response.json())["talk"] is False
+    assert scopes(mock_client) == [{"kind": "grid-view", "deviceIds": [EXPORTED]}]
+
+
+async def test_a_talking_token_is_never_served_to_a_request_that_did_not_ask(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hass_client: ClientSessionGenerator,
+) -> None:
+    """`talk` is part of the CACHE KEY, and this is the defect that proves it.
+
+    The cache is keyed per (entry, kind, device ids) so a card re-rendering
+    several times a second does not write a row into the hub's token table each
+    time. Two tokens for the same cameras are nevertheless DIFFERENT credentials
+    when one of them can speak into the house: without `talk` in the key, the
+    first mint of a scope is handed to every later request for it — a card that
+    never asked would be given a talking token, and a card that did would be
+    given a silent one and look broken.
+    """
+    await setup_integration(hass, config_entry)
+    allow_talk(hass, config_entry, True)
+    await hass.async_block_till_done()
+    mock_client.mutate.reset_mock()
+    mock_client.mutate.return_value = minted()
+    client = await hass_client()
+
+    talking = await post(
+        client, {"kind": "grid-view", "device_ids": [EXPORTED], "talk": True}
+    )
+    silent = await post(client, {"kind": "grid-view", "device_ids": [EXPORTED]})
+
+    assert (await talking.json())["talk"] is True
+    assert (await silent.json())["talk"] is False
+    # TWO mints, not one: they are not the same credential.
+    assert mock_client.mutate.await_count == 2
+    assert scopes(mock_client) == [
+        {"kind": "grid-view", "deviceIds": [EXPORTED], "talk": True},
+        {"kind": "grid-view", "deviceIds": [EXPORTED]},
+    ]
+    # …and two GRANTS, or the relay would inject whichever token was issued
+    # last behind a single same-origin path.
+    assert (await talking.json())["proxy_base"] != (await silent.json())["proxy_base"]
+
+
+async def test_a_talking_scope_is_reused_like_any_other(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hass_client: ClientSessionGenerator,
+) -> None:
+    """Splitting the key must not cost the cache: the same ask still mints once."""
+    await setup_integration(hass, config_entry)
+    allow_talk(hass, config_entry, True)
+    await hass.async_block_till_done()
+    mock_client.mutate.reset_mock()
+    mock_client.mutate.return_value = minted()
+    client = await hass_client()
+
+    body = {"kind": "grid-view", "device_ids": [EXPORTED], "talk": True}
+    await post(client, body)
+    await post(client, body)
+
+    assert mock_client.mutate.await_count == 1
+
+
+async def test_an_events_token_never_carries_talk_back(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hass_client: ClientSessionGenerator,
+) -> None:
+    """The events perimeter has no camera to speak through.
+
+    Confined here rather than left to the hub to ignore: a flag that travels on
+    a scope it means nothing for is a flag somebody will eventually honour.
+    """
+    await setup_integration(hass, config_entry)
+    allow_talk(hass, config_entry, True)
+    await hass.async_block_till_done()
+    mock_client.mutate.reset_mock()
+    mock_client.mutate.return_value = minted()
+    client = await hass_client()
+
+    response = await post(
+        client, {"kind": "events-view", "device_ids": [EXPORTED], "talk": True}
+    )
+
+    assert (await response.json())["talk"] is False
+    assert scopes(mock_client) == [{"kind": "events-view", "deviceIds": [EXPORTED]}]
+
+
+async def test_talk_must_be_a_boolean(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hass_client: ClientSessionGenerator,
+) -> None:
+    """Refused before the hub is called, like `direct`."""
+    await setup_integration(hass, config_entry)
+    mock_client.mutate.reset_mock()
+    client = await hass_client()
+
+    response = await post(
+        client, {"kind": "grid-view", "device_ids": [EXPORTED], "talk": "yes"}
+    )
+
+    assert response.status == 400
+    mock_client.mutate.assert_not_awaited()
 
 
 async def test_a_card_is_given_a_scoped_share_token_never_the_hub_credential(
