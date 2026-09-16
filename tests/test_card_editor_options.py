@@ -428,6 +428,7 @@ def test_every_wall_option_rides_the_open_channel() -> None:
         "setShowName",
         "setActiveOnly",
         "setShowBoxes",
+        "setHighlight",
     ):
         assert f'"{command}"' in body or f"{command}:" in body, (
             f"`{command}` is never pushed, so the option that drives it is dead "

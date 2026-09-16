@@ -121,6 +121,12 @@ async function serve(page) {
         body: read("camstack-events-card.js"),
       });
     }
+    if (url.pathname === "/local/camstack-grid-controls.js") {
+      return route.fulfill({
+        contentType: "text/javascript",
+        body: read("camstack-grid-controls.js"),
+      });
+    }
     if (url.pathname === "/local/camstack-hub-probe.js") {
       return route.fulfill({
         contentType: "text/javascript",
@@ -313,8 +319,12 @@ async function run() {
     check("the host scrolls DOWN, and the wall behind is taller than the box", () => {
       assert.equal(styled.overflowY, "auto");
       assert.notEqual(styled.overflowX, "auto");
-      // Full width — the wall no longer overflows sideways at all.
-      assert.match(styled.frame, /width: ?100%/);
+      // The wall no longer overflows sideways at all — but it does give up a
+      // strip of the scroller, because that strip is the only part of it a
+      // finger can reach: the embed's tile overlay carries `touch-action:
+      // none` and consumes any drag that lands on the wall itself. Measured in
+      // `grid-card-scroll.spec.cjs`.
+      assert.match(styled.frame, /width: ?calc\(100% - 24px\)/);
       // Three rows of two behind a one-row viewport: the frame is the taller
       // of the two, and a pixel height (not an aspect) is what says so.
       const wall = Number(/height: ?([\d.]+)px/.exec(styled.frame)?.[1]);

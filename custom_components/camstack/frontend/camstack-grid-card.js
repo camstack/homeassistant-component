@@ -91,6 +91,19 @@ const VERSION_QUERY = new URL(import.meta.url).search;
 const { probeHub, buildUnreachableNotice } = await import(
   `./camstack-hub-probe.js${VERSION_QUERY}`
 );
+/**
+ * The bottom control bar and the highlight vocabulary it edits — the viewer's
+ * grid bar, mirrored. Same sibling-import discipline as the probe: it is not a
+ * Lovelace resource of its own, it is asked for with the card's own `?v=`.
+ */
+const {
+  buildControlBar,
+  highlightFromConfig,
+  withHighlightDefaults,
+  DETECTION_MACRO_CLASSES,
+  DETECTION_HOLD_OPTIONS,
+  LAYOUT_OPTIONS,
+} = await import(`./camstack-grid-controls.js${VERSION_QUERY}`);
 /** The embed posts `embed-ready` within this, or the card says the player did not start. */
 const EMBED_READY_TIMEOUT_MS = 12000;
 
@@ -183,7 +196,73 @@ const EMBED_CONTRACT = {
  * `flow` and `fixed` both scroll VERTICALLY, which is the direction a wall of
  * rows scrolls and the direction a mouse wheel and a thumb already do.
  */
-const LAYOUT_MODES = ["fit", "flow", "fixed"];
+const LAYOUT_MODES = ["auto", "fit", "flow", "fixed"];
+
+/**
+ * The `auto` arrangement's column rule — the viewer's, copied by SEMANTICS.
+ *
+ * Source: `camstack/src/hooks/use-responsive.ts` → `useGridColumns`, the one
+ * answer the app gives to "how many cameras across, on a box this wide". Its
+ * numbers are reproduced verbatim so that a wall in Home Assistant and the same
+ * wall in the app break into columns at the same widths:
+ *
+ *   • under 700   — ONE column in portrait, TWO in landscape. Orientation, not
+ *                   arithmetic: a phone held upright gets one readable camera,
+ *                   and turning it sideways gets two. This is the part a pixel
+ *                   formula gets wrong.
+ *   • 700–1100    — three.
+ *   • 1100 and up — four, plus one more per 360, capped at six.
+ *
+ * The narrowest camera the rule can produce is therefore ~233 px (700 / 3) and
+ * the widest before it splits again is ~366 px — that band IS the "acceptable
+ * horizontal size" the mode promises, and {@link AUTO_MIN_TILE_WIDTH} states
+ * its floor so a test can hold the rule to it.
+ */
+const AUTO_TABLET_WIDE_MIN = 700;
+const AUTO_DESKTOP_MIN = 1100;
+const AUTO_WIDE_DESKTOP_STEP = 360;
+const AUTO_MAX_COLUMNS = 6;
+/** The floor the rule above can never go under, in CSS px. */
+const AUTO_MIN_TILE_WIDTH = 233;
+
+/**
+ * How many cameras across, for a box this wide in a window of this shape.
+ *
+ * `landscape` is the WINDOW's, not the card's: a Lovelace card has no height of
+ * its own to be landscape about (it grows to fit its wall), while "the phone is
+ * turned sideways" is exactly the fact the viewer's rule keys on.
+ *
+ * Pure, so `test_card_grid_controls.py` can hold it against the viewer's.
+ */
+function autoColumns(cardWidth, landscape) {
+  const width = cardWidth > 0 ? cardWidth : 0;
+  if (width <= 0) return 1;
+  if (width < AUTO_TABLET_WIDE_MIN) return landscape ? 2 : 1;
+  if (width < AUTO_DESKTOP_MIN) return 3;
+  const extra = Math.floor((width - AUTO_DESKTOP_MIN) / AUTO_WIDE_DESKTOP_STEP);
+  return Math.min(AUTO_MAX_COLUMNS, 4 + extra);
+}
+
+/**
+ * How much of the scroller a finger can reach, in CSS px.
+ *
+ * MEASURED, not guessed. The embed puts a `touch-action: none` overlay over
+ * every tile (`embed/src/components/ZoomPan.tsx:160`, plus a
+ * `setPointerCapture` on pointerdown) so it can pinch and pan a camera. A touch
+ * that lands on the frame is therefore consumed by the framed document and the
+ * host's scroller never sees it — with a plain frame the same scroller moves
+ * 391 px for the same drag, and with the embed's overlay it moves 0. That is
+ * the whole of "the card does not scroll on mobile", and it is not this card's
+ * CSS: nothing the host can set reaches inside the frame.
+ *
+ * So a scrolling wall keeps a strip of the scroller UNCOVERED, where a drag
+ * still belongs to the host. Measured at 24 px: 684 px of scroll for the drag
+ * that produced 0 without it.
+ *
+ * It costs width, so it exists only while there is something to scroll — and
+ * the `auto` arrangement, which is the default, never scrolls at all.
+ */
+const SCROLL_GUTTER_PX = 24;
 
 /** Default cap on one camera's width in `flow`, in CSS px. */
 const DEFAULT_MAX_TILE_WIDTH = 480;
@@ -210,9 +289,19 @@ function clampInt(value, [min, max], fallback) {
  * to a division by zero; the ResizeObserver re-runs this the moment a real
  * width exists, and the frame is restyled, never rebuilt.
  */
-function planGrid({ mode, total, cardWidth, columns, rows, maxRows, maxTileWidth }) {
+function planGrid({ mode, total, cardWidth, columns, rows, maxRows, maxTileWidth, landscape }) {
   const count = Math.max(1, total | 0);
   const colCap = EMBED_CONTRACT.layout[1];
+
+  if (mode === "auto") {
+    // Fill the width with as many cameras as stay readable, take whatever rows
+    // that needs, and never scroll — the host's scroller is the one surface a
+    // finger cannot reach on a phone (see SCROLL_GUTTER_PX), so the default
+    // arrangement is the one that never asks it to.
+    const cols = Math.min(colCap, autoColumns(cardWidth, landscape === true), count);
+    const totalRows = Math.ceil(count / cols);
+    return { columns: cols, totalRows, visibleRows: totalRows, scrolls: false };
+  }
 
   if (mode === "flow") {
     const width = cardWidth > 0 ? cardWidth : 0;
@@ -394,6 +483,23 @@ class CamstackGridCard extends HTMLElement {
      */
     this._audioOnIds = new Set();
     this._pausedIds = new Set();
+    /**
+     * The bar's SESSION overrides of what the card config says.
+     *
+     * `null` means "the config answers". They are on the element for the same
+     * reason the two sets above are — and they are session-scoped because the
+     * persisted document here is the Lovelace config, which a rendered card
+     * cannot write (only the config element can, and it has no frame). A press
+     * therefore lasts until the dashboard is reloaded, and `setConfig` drops
+     * them: the saved document has just spoken and it wins.
+     */
+    this._sessionQuality = null;
+    this._sessionColumns = null;
+    this._sessionActiveOnly = null;
+    this._sessionShowBoxes = null;
+    this._sessionHighlightOn = null;
+    this._sessionHighlight = null;
+    this._bar = null;
     this._onMessage = this._onMessage.bind(this);
   }
 
@@ -577,6 +683,13 @@ class CamstackGridCard extends HTMLElement {
   setConfig(config) {
     this._config = config || {};
     this._sentConfigKey = null;
+    // The saved document has changed; the session's opinions of it are stale.
+    this._sessionQuality = null;
+    this._sessionColumns = null;
+    this._sessionActiveOnly = null;
+    this._sessionShowBoxes = null;
+    this._sessionHighlightOn = null;
+    this._sessionHighlight = null;
     this._render();
   }
 
@@ -856,6 +969,146 @@ class CamstackGridCard extends HTMLElement {
     this._postCommand(command, [...set]);
   }
 
+  // ── what the wall is set to right now ────────────────────────────────────
+  //
+  // One reader per setting, so the bar, the seed config and the open channel
+  // can never be told three different things. A session override wins over the
+  // card config for as long as the dashboard is open.
+
+  _quality() {
+    return this._sessionQuality ?? this._config.quality ?? "auto";
+  }
+
+  _activeOnly() {
+    return this._sessionActiveOnly ?? this._config.active_only === true;
+  }
+
+  _showBoxes() {
+    return this._sessionShowBoxes ?? this._config.show_boxes === true;
+  }
+
+  /**
+   * Is the highlight border lit at all?
+   *
+   * The viewer's `options.highlightOn` defaults ON for a grid. Here absence
+   * means OFF, and deliberately: the embed's own schema says "absent ⇒
+   * highlight off", and every dashboard written before this feature existed
+   * has no key. Defaulting a card's wall ON would put borders on walls nobody
+   * asked to change. Once the operator says yes, everything under it is the
+   * viewer's defaults.
+   */
+  _highlightOn() {
+    return this._sessionHighlightOn ?? this._config.highlight === true;
+  }
+
+  /** The viewer-shaped `GridHighlightSettings` this wall is running. */
+  _highlight() {
+    return this._sessionHighlight ?? highlightFromConfig(this._config);
+  }
+
+  /** The highlight as the embed takes it: the triggers plus the master switch
+   *  (`gridHighlightSchema` — `enabled` is the bar's toggle). */
+  _highlightCommand() {
+    return { ...this._highlight(), enabled: this._highlightOn() };
+  }
+
+  /**
+   * The bar's view of this card, and the only way it changes anything.
+   *
+   * Every setter ends in an embed command through `_publishWall` — the bar
+   * keeps no state of its own, so there is no second document to disagree with
+   * this one.
+   */
+  _barHost() {
+    return {
+      cameras: () =>
+        this._deviceIds().map((id) => ({
+          id,
+          name: friendlyName(this._hass, this._entityForDevice(id)) || `Camera ${id}`,
+        })),
+      audioOn: (id) => this._audioOnIds.has(id),
+      audioCount: () => this._audioOnIds.size,
+      toggleAudio: (id) => this._toggleHostSet(this._audioOnIds, id, "setAudioOn"),
+      toggleAllAudio: () => {
+        const ids = this._deviceIds();
+        const anyOn = ids.some((id) => this._audioOnIds.has(id));
+        this._audioOnIds = new Set(anyOn ? [] : ids);
+        this._postCommand("setAudioOn", [...this._audioOnIds]);
+      },
+      anyPaused: () => this._pausedIds.size > 0,
+      toggleAllPaused: () => {
+        const ids = this._deviceIds();
+        this._pausedIds = new Set(this._pausedIds.size > 0 ? [] : ids);
+        this._postCommand("setPaused", [...this._pausedIds]);
+      },
+      quality: () => this._quality(),
+      qualityTiers: () => EMBED_CONTRACT.quality,
+      qualityLabel: (tier) => QUALITY_LABELS[tier] || tier,
+      setQuality: (tier) => {
+        this._sessionQuality = tier;
+        this._publishWall(false);
+      },
+      columns: () => this._sessionColumns ?? this._config.columns ?? "auto",
+      layoutOptions: () =>
+        this._layoutMode() === "fixed"
+          ? LAYOUT_OPTIONS.filter((value) => value !== "auto")
+          : LAYOUT_OPTIONS,
+      /**
+       * Why the column picker may be refused.
+       *
+       * `flow` derives the column count from the card's MEASURED width and a
+       * cap in pixels; a pinned count there would be a second authority for
+       * one arrangement, which is the bug the card's own layout rewrite
+       * removed. Refused with the reason rather than hidden.
+       */
+      layoutReason: () =>
+        this._layoutMode() === "flow"
+          ? "This wall flows to a maximum camera width, so the number of " +
+            "columns follows the card's width. Change the arrangement in the " +
+            "card settings to pin it."
+          : null,
+      setColumns: (value) => {
+        this._sessionColumns = value;
+        this._publishWall(false);
+        this._restyleFrame();
+      },
+      activeOnly: () => this._activeOnly(),
+      toggleActiveOnly: () => {
+        this._sessionActiveOnly = !this._activeOnly();
+        this._publishWall(false);
+      },
+      showBoxes: () => this._showBoxes(),
+      setShowBoxes: (value) => {
+        this._sessionShowBoxes = value;
+        this._publishWall(false);
+      },
+      highlightOn: () => this._highlightOn(),
+      setHighlightOn: (value) => {
+        this._sessionHighlightOn = value;
+        this._publishWall(false);
+      },
+      highlight: () => this._highlight(),
+      patchHighlight: (patch) => {
+        this._sessionHighlight = withHighlightDefaults({ ...this._highlight(), ...patch });
+        this._publishWall(false);
+      },
+      toggleHighlightClass: (macro) => {
+        if (!DETECTION_MACRO_CLASSES.includes(macro)) {
+          return;
+        }
+        const current = this._highlight().detectionClasses;
+        const next = current.includes(macro)
+          ? current.filter((c) => c !== macro)
+          : [...current, macro];
+        this._sessionHighlight = withHighlightDefaults({
+          ...this._highlight(),
+          detectionClasses: next,
+        });
+        this._publishWall(false);
+      },
+    };
+  }
+
   /** Re-push everything the host owns, after the page has come back up. */
   _republishHostState() {
     this._postCommand("setAudioOn", [...this._audioOnIds]);
@@ -888,10 +1141,15 @@ class CamstackGridCard extends HTMLElement {
     const wall = {
       setDevices: deviceIds,
       setLayout: this._layout(deviceIds),
-      setQuality: this._config.quality || "auto",
+      setQuality: this._quality(),
       setShowName: this._config.show_names !== false,
-      setActiveOnly: this._config.active_only === true,
-      setShowBoxes: this._config.show_boxes === true,
+      setActiveOnly: this._activeOnly(),
+      setShowBoxes: this._showBoxes(),
+      // The border policy for the whole wall — per-GRID in the viewer
+      // (`view-options-scope.ts`: "which camera just lit up" only means
+      // something if every tile lights up for the same reason), and a card IS
+      // a grid here.
+      setHighlight: this._highlightCommand(),
     };
     for (const kind of Object.keys(wall)) {
       const encoded = JSON.stringify(wall[kind]);
@@ -900,6 +1158,9 @@ class CamstackGridCard extends HTMLElement {
       }
       this._publishedWall[kind] = encoded;
       this._postCommand(kind, wall[kind]);
+    }
+    if (this._bar) {
+      this._bar.sync();
     }
   }
 
@@ -992,7 +1253,7 @@ class CamstackGridCard extends HTMLElement {
       ...(grant && grant.token ? { token: grant.token } : {}),
       devices: deviceIds,
       layout: this._layout(deviceIds),
-      quality: this._config.quality || "auto",
+      quality: this._quality(),
       showName: this._config.show_names !== false,
       showBadges: this._config.show_badges !== false,
       muted: this._config.muted !== false,
@@ -1003,8 +1264,12 @@ class CamstackGridCard extends HTMLElement {
       audioOnIds: [...this._audioOnIds],
       pausedIds: [...this._pausedIds],
       labels: resolveLabels(this._hass, this._config),
-      ...(this._config.active_only === true ? { activeOnly: true } : {}),
-      ...(this._config.show_boxes === true ? { showBoxes: true } : {}),
+      ...(this._activeOnly() ? { activeOnly: true } : {}),
+      ...(this._showBoxes() ? { showBoxes: true } : {}),
+      // Seeded as well as commanded: a page mounting now renders its first
+      // frame from this, and a wall whose borders arrived one command later
+      // would flash unlit.
+      highlight: this._highlightCommand(),
     };
     const key = JSON.stringify({ ...config, token: undefined });
     if (key === this._sentConfigKey) {
@@ -1063,8 +1328,16 @@ class CamstackGridCard extends HTMLElement {
     if (LAYOUT_MODES.includes(declared)) {
       return declared;
     }
+    // A card written before `layout_mode` existed still CHOSE an arrangement,
+    // in the vocabulary it had. `auto` is the default for a card that chose
+    // nothing at all — never for one that did, whose wall must come back the
+    // shape the operator left it.
     const legacyCap = clampInt(this._config.max_visible, EMBED_CONTRACT.max_visible, null);
-    return legacyCap === null ? "fit" : "fixed";
+    if (legacyCap !== null) {
+      return "fixed";
+    }
+    const pinned = this._config.columns ?? this._config.layout;
+    return pinned === undefined || pinned === null || pinned === "" ? "auto" : "fit";
   }
 
   /** The wall's geometry for the cameras it is showing, at its measured width. */
@@ -1074,7 +1347,7 @@ class CamstackGridCard extends HTMLElement {
     const columns =
       mode === "fixed" && this._config.columns === undefined && legacyCap !== null
         ? legacyCap
-        : (this._config.columns ?? this._config.layout ?? "auto");
+        : (this._sessionColumns ?? this._config.columns ?? this._config.layout ?? "auto");
     const rows =
       mode === "fixed" && this._config.rows === undefined && legacyCap !== null
         ? 1
@@ -1087,6 +1360,7 @@ class CamstackGridCard extends HTMLElement {
       rows,
       maxRows: this._config.max_rows,
       maxTileWidth: this._config.max_tile_width,
+      landscape: window.innerWidth > window.innerHeight,
     });
   }
 
@@ -1146,7 +1420,11 @@ class CamstackGridCard extends HTMLElement {
    * or not that reached the cap.
    */
   _tileHeightPx(plan) {
-    const width = this._cardWidth();
+    // The wall is narrower than the scroller by the gutter, so the tile height
+    // is derived from the width the FRAME has, not the width the card has —
+    // otherwise every scrolling wall is a few pixels too tall and the last row
+    // never quite comes into view.
+    const width = this._cardWidth() - (plan.scrolls ? SCROLL_GUTTER_PX : 0);
     const columns = plan.columns === "auto" ? 1 : plan.columns;
     if (!(width > 0) || !(columns > 0)) {
       return 0;
@@ -1172,14 +1450,28 @@ class CamstackGridCard extends HTMLElement {
   _frameStyle() {
     const plan = this._plan(this._deviceIds());
     const chrome = "border:none;display:block;border-radius:8px;";
+    if (this._layoutMode() === "auto") {
+      // The wall is exactly its rows tall, so every camera keeps the shape the
+      // operator picked while the width is spent on as many columns as stay
+      // readable. An aspect ratio over the WHOLE card (what `fit` does) would
+      // squash a four-row wall into one camera's worth of height.
+      const tileHeight = this._tileHeightPx(plan);
+      return tileHeight > 0
+        ? `width:100%;height:${(tileHeight * plan.totalRows).toFixed(2)}px;${chrome}`
+        : `width:100%;height:${this._frameHeight()}px;${chrome}`;
+    }
     if (plan.scrolls) {
       const tileHeight = this._tileHeightPx(plan);
+      // The gutter is the only part of the scroller a finger can reach — see
+      // SCROLL_GUTTER_PX. The wall gives up those pixels rather than being
+      // unscrollable on every phone.
+      const width = `width:calc(100% - ${SCROLL_GUTTER_PX}px);`;
       if (tileHeight > 0) {
-        return `width:100%;height:${(tileHeight * plan.totalRows).toFixed(2)}px;${chrome}`;
+        return `${width}height:${(tileHeight * plan.totalRows).toFixed(2)}px;${chrome}`;
       }
       // Pre-layout: no measured width yet, so no honest height. The
       // ResizeObserver restyles this the moment there is one.
-      return `width:100%;height:${this._frameHeight()}px;${chrome}`;
+      return `${width}height:${this._frameHeight()}px;${chrome}`;
     }
     const aspect = this._config.aspect_ratio || DEFAULT_ASPECT;
     if (aspect !== "none" && ASPECT_RATIOS[aspect]) {
@@ -1291,6 +1583,7 @@ class CamstackGridCard extends HTMLElement {
       this._iframe = null;
       this._scroller = null;
       this._status = null;
+      this._bar = null;
       return;
     }
 
@@ -1316,6 +1609,22 @@ class CamstackGridCard extends HTMLElement {
     wrapper.appendChild(status);
 
     card.appendChild(wrapper);
+
+    /**
+     * The control bar — the viewer's grid bar, under the wall.
+     *
+     * Built HERE, with the frame, and never again: `_buildCard` runs only when
+     * the frame URL changes, so a `set hass` storm cannot close a popover the
+     * operator has open. Everything that changes afterwards goes through
+     * `sync()`.
+     *
+     * It sits OUTSIDE the wrapper the status line is absolutely positioned in,
+     * so the bar never covers the wall and the wall never covers the bar.
+     */
+    this._bar = this._config.show_controls === false ? null : buildControlBar(this._barHost());
+    if (this._bar) {
+      card.appendChild(this._bar.element);
+    }
     this._iframe = iframe;
     this._status = status;
     this.shadowRoot.replaceChildren(card);
@@ -1373,9 +1682,14 @@ class CamstackGridCardEditor extends HTMLElement {
     if (LAYOUT_MODES.includes(declared)) {
       return declared;
     }
-    return clampInt(this._config.max_visible, EMBED_CONTRACT.max_visible, null) === null
-      ? "fit"
-      : "fixed";
+    if (clampInt(this._config.max_visible, EMBED_CONTRACT.max_visible, null) !== null) {
+      return "fixed";
+    }
+    // Same rule as the card's `_layoutMode`: a pinned column count IS a choice,
+    // and the editor must show the operator the arrangement their wall is
+    // actually running.
+    const pinned = this._config.columns ?? this._config.layout;
+    return pinned === undefined || pinned === null || pinned === "" ? "auto" : "fit";
   }
 
   /**
@@ -1390,6 +1704,12 @@ class CamstackGridCardEditor extends HTMLElement {
   _modeFields() {
     const config = this._config;
     const mode = this._mode();
+    if (mode === "auto") {
+      // Nothing to set: the whole promise is that the card decides, from its
+      // own measured width. A knob here would be the second authority over the
+      // arrangement that the one-control rewrite removed.
+      return [];
+    }
     if (mode === "flow") {
       return [
         numberField(
@@ -1416,6 +1736,55 @@ class CamstackGridCardEditor extends HTMLElement {
     ];
   }
 
+  /**
+   * The highlight rows, in the viewer's order and nesting.
+   *
+   * `HighlightTriggerRows.tsx` is the shape: motion · audio Off/Low/Mid/High ·
+   * detection, and the class chips + hold only WHILE detection is on. The
+   * nesting is not decoration — a trigger offered for a switch that is off is
+   * a control that does nothing, and the whole section hangs off the master
+   * toggle for the same reason (`GridMenuPanel.tsx`).
+   *
+   * The audio row is the three NAMED presets, never a dB box: the values are
+   * meter rungs (`audio-level.ts`), and a free number would let a dashboard
+   * ask for a threshold the meter cannot show.
+   */
+  _highlightFields() {
+    const config = this._config;
+    if (config.highlight !== true) {
+      return [];
+    }
+    const rows = [
+      checkboxField("highlight_motion", "Motion lights the border",
+        config.highlight_motion !== false),
+      selectField("highlight_audio", "Audio lights the border", config.highlight_audio || "off", [
+        ["off", "Off"],
+        ["low", "Low"],
+        ["mid", "Medium"],
+        ["high", "High"],
+      ]),
+      checkboxField("highlight_detection", "Detections light the border",
+        config.highlight_detection === true),
+    ];
+    if (config.highlight_detection === true) {
+      rows.push(
+        checkboxGroup(
+          "highlight_detection_classes",
+          "Only these classes (none selected means any)",
+          config.highlight_detection_classes || [],
+          DETECTION_MACRO_CLASSES
+        ),
+        selectField(
+          "highlight_detection_hold",
+          "Keep the border lit for",
+          String(config.highlight_detection_hold ?? 3),
+          DETECTION_HOLD_OPTIONS.map((v) => [String(v), `${v}s`])
+        )
+      );
+    }
+    return rows;
+  }
+
   _render() {
     const config = this._config;
     const wrapper = document.createElement("div");
@@ -1427,6 +1796,7 @@ class CamstackGridCardEditor extends HTMLElement {
         friendlyName(this._hass, id)
       ),
       selectField("layout_mode", "Arrangement", this._mode(), [
+        ["auto", "Automatic — fill the width, keep every camera readable"],
         ["fit", "Fit them all on screen"],
         ["flow", "Cap the camera size, scroll the rest"],
         ["fixed", "Fixed columns and rows, scroll the rest"],
@@ -1451,6 +1821,13 @@ class CamstackGridCardEditor extends HTMLElement {
       checkboxField("show_names", "Show the camera name on each tile", config.show_names !== false),
       checkboxField("show_boxes", "Show detection boxes", config.show_boxes === true),
       checkboxField("active_only", "Only cameras that are currently active", config.active_only === true),
+      checkboxField(
+        "show_controls",
+        "Show the control bar under the wall",
+        config.show_controls !== false
+      ),
+      checkboxField("highlight", "Highlight cameras that are active", config.highlight === true),
+      ...this._highlightFields(),
       textField(
         "url_base",
         "Hub URL override (optional)",
@@ -1469,7 +1846,7 @@ class CamstackGridCardEditor extends HTMLElement {
     setOrDelete(config, "title", readText(root, "title"));
     config.entities = readChecked(root, "entities");
     const mode = readText(root, "layout_mode");
-    config.layout_mode = LAYOUT_MODES.includes(mode) ? mode : "fit";
+    config.layout_mode = LAYOUT_MODES.includes(mode) ? mode : "auto";
 
     // The legacy pair is REWRITTEN, not carried: leaving `max_visible` behind
     // would let `_layoutMode`'s derivation keep answering for a card whose
@@ -1499,6 +1876,41 @@ class CamstackGridCardEditor extends HTMLElement {
     config.show_names = readBool(root, "show_names");
     setBoolOrDelete(config, "show_boxes", readBool(root, "show_boxes"));
     setBoolOrDelete(config, "active_only", readBool(root, "active_only"));
+    // Default TRUE, so only the "no" is worth writing — `setBoolOrDelete` can
+    // only ever store `true` and would silently drop the operator's "off".
+    setFalseOrDelete(config, "show_controls", readBool(root, "show_controls"));
+    setBoolOrDelete(config, "highlight", readBool(root, "highlight"));
+    // The triggers are only read while their switch is on: a value left behind
+    // for a switch that is off is a setting nothing shows and nothing applies,
+    // and the next reader cannot tell it from one in force.
+    if (config.highlight === true) {
+      setFalseOrDelete(config, "highlight_motion", readBool(root, "highlight_motion"));
+      const audio = readText(root, "highlight_audio");
+      setOrDelete(config, "highlight_audio", audio === "off" ? "" : audio);
+      setBoolOrDelete(config, "highlight_detection", readBool(root, "highlight_detection"));
+      if (config.highlight_detection === true) {
+        const classes = readChecked(root, "highlight_detection_classes");
+        if (classes.length) {
+          config.highlight_detection_classes = classes;
+        } else {
+          delete config.highlight_detection_classes;
+        }
+        setIntOrDelete(config, "highlight_detection_hold", readText(root, "highlight_detection_hold"));
+      } else {
+        delete config.highlight_detection_classes;
+        delete config.highlight_detection_hold;
+      }
+    } else {
+      for (const key of [
+        "highlight_motion",
+        "highlight_audio",
+        "highlight_detection",
+        "highlight_detection_classes",
+        "highlight_detection_hold",
+      ]) {
+        delete config[key];
+      }
+    }
     setOrDelete(config, "url_base", readText(root, "url_base"));
     this.dispatchEvent(
       new CustomEvent("config-changed", { detail: { config }, bubbles: true, composed: true })
@@ -1621,6 +2033,29 @@ function readBool(root, id) {
   return el ? !!el.checked : false;
 }
 
+/** A multi-selection over a fixed vocabulary — `cameraPicker`'s shape without
+ *  the entity lookup, read back by the same `readChecked`. */
+function checkboxGroup(id, label, selected, values) {
+  const box = document.createElement("div");
+  box.dataset.picker = id;
+  box.style.cssText =
+    "display:flex;flex-wrap:wrap;gap:10px;border:1px solid var(--divider-color,#444);" +
+    "border-radius:6px;padding:8px;";
+  for (const value of values) {
+    const row = document.createElement("label");
+    row.style.cssText = "display:flex;align-items:center;gap:6px;font-size:14px;";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = value;
+    input.checked = selected.includes(value);
+    const caption = document.createElement("span");
+    caption.textContent = value;
+    row.append(input, caption);
+    box.appendChild(row);
+  }
+  return labelled(id, label, box);
+}
+
 function readChecked(root, pickerId) {
   const box = root.querySelector(`[data-picker="${pickerId}"]`);
   if (!box) {
@@ -1639,6 +2074,16 @@ function setOrDelete(config, key, value) {
   }
 }
 
+/** The mirror of {@link setBoolOrDelete} for an option whose DEFAULT is true:
+ *  only the operator's "off" is worth a key, and `setBoolOrDelete` cannot say
+ *  it — it stores `true` or nothing, so an "off" would vanish on save. */
+function setFalseOrDelete(config, key, value) {
+  if (value) {
+    delete config[key];
+  } else {
+    config[key] = false;
+  }
+}
 function setBoolOrDelete(config, key, value) {
   if (value) {
     config[key] = true;

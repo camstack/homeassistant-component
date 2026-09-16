@@ -333,7 +333,7 @@ aspect_ratio: "16:9"
 | `entities` | — | CamStack camera entities, in tile order. Their Home Assistant names caption the tiles |
 | `device_ids` | — | Hub device ids, when a camera has no entity. `entities` wins if both are set |
 | `title` | — | `ha-card` header |
-| `layout_mode` | `fit` | How the wall is arranged: `fit`, `flow` or `fixed`. See below |
+| `layout_mode` | `auto` | How the wall is arranged: `auto`, `fit`, `flow` or `fixed`. See below |
 | `columns` | `auto` / `3` | `fit`: `auto` or a column count. `fixed`: the column count |
 | `rows` | `2` | `fixed` only — rows visible before the wall scrolls |
 | `max_tile_width` | `480` | `flow` only — the widest a single camera may get, in px |
@@ -344,6 +344,13 @@ aspect_ratio: "16:9"
 | `show_names` | `true` | Overlay the camera name on each tile |
 | `show_boxes` | `false` | Live detection boxes |
 | `active_only` | `false` | Only cameras currently active |
+| `show_controls` | `true` | The control bar under the wall |
+| `highlight` | `false` | Light a border on the cameras that are doing something |
+| `highlight_motion` | `true` | `highlight` only — motion lights the border |
+| `highlight_audio` | `off` | `highlight` only — `off`, `low`, `mid`, `high` |
+| `highlight_detection` | `false` | `highlight` only — detections light the border |
+| `highlight_detection_classes` | — | `highlight_detection` only — `person`, `vehicle`, `animal`, `face`, `plate`. Empty means any |
+| `highlight_detection_hold` | `3` | `highlight_detection` only — seconds the border stays lit: `2`, `3`, `5`, `8` |
 | `url_base` | — | Override the hub address. Leave empty: the card asks the integration |
 
 #### Arranging the wall
@@ -353,11 +360,15 @@ in front of you are the ones that are actually in force.
 
 | `layout_mode` | What it does | Its fields |
 | --- | --- | --- |
+| `auto` | **The default.** Fills the card's width with as many cameras as stay readable, takes whatever rows that needs, and never scrolls | `aspect_ratio` |
 | `fit` | Every camera on screen, nothing scrolls. The wall shrinks to fit | `columns`, `aspect_ratio` |
 | `flow` | No camera wider than `max_tile_width`; as many columns as fit across the card, `max_rows` of them visible, the rest scrolls | `max_tile_width`, `max_rows`, `aspect_ratio` |
 | `fixed` | Exactly `columns` × `rows` visible, the rest scrolls | `columns`, `rows`, `aspect_ratio` |
 
 ```yaml
+# the default: the card decides, and every camera stays readable
+layout_mode: auto
+
 # a hall wall, everything at a glance
 layout_mode: fit
 
@@ -372,6 +383,16 @@ columns: 2
 rows: 2
 ```
 
+`auto` has no fields because deciding is the whole promise. Its column rule is
+the viewer's own (`useGridColumns`), reproduced so a wall breaks into columns at
+the same widths in Home Assistant and in the app: one camera across under 700 px
+in portrait and two in landscape, three up to 1100, then four plus one more per
+360, capped at six. The narrowest camera it can produce is therefore ~233 px —
+that floor *is* the "acceptable horizontal size", and it does not move when you
+add cameras: twenty cameras on a 1400 px card are four columns of five rows, not
+six columns of thin ones. Turning a phone changes the answer, because
+orientation is the part a pixel formula gets wrong.
+
 `flow` is a statement about **pixels on the glass**, so the card measures its own
 width and re-derives the column count when the dashboard column, the sidebar or
 the phone's orientation changes it. It restyles the frame; it never rebuilds it.
@@ -385,11 +406,48 @@ go. That is also why `aspect_ratio` shapes one CAMERA and not the card: with a
 cap in force the card's own shape is a consequence of the cap, and two controls
 for one shape is an argument this card refuses to have.
 
-**Upgrading:** a card written before `layout_mode` keeps working untouched.
+**Scrolling on a phone.** `auto` never scrolls, and that is deliberate. The
+embed puts `touch-action: none` over every tile so it can pinch and pan one
+camera, which means a touch that lands on the wall is consumed by the player and
+the card's scroller never sees it — measured: the same drag moves a plain frame's
+scroller 391 px and the embed's 0. Nothing a host can set reaches inside a
+frame, so a wall that DOES scroll (`flow`, `fixed`) keeps a 24 px strip of the
+scroller uncovered, where a drag still belongs to the card. If you are on a
+phone, prefer `auto`.
+
+**Upgrading:** a card written before `layout_mode` keeps working untouched. A
+card that pinned a column count keeps `fit`, and one with the legacy
+`max_visible` keeps `fixed` — `auto` is the default for a card that chose
+nothing, never a change made under a wall somebody built.
 `max_visible: N` meant "N across, one row, the rest scrolls sideways" and is
 read as `fixed` with N columns and one row — the same cameras on screen, the
 same rest-scrolls, now downwards. Open the card editor once and it is rewritten
 explicitly.
+
+#### The control bar
+
+The strip under the wall is the viewer's own grid bar, control for control and
+in the same order: **play/pause all · audio · talk · quality · layout ·
+highlight · active-only**. It opens the same pickers, and the highlight menu is
+the app's own (motion · audio Off/Low/Medium/High · detection + classes + hold).
+
+Two things about it differ from the app, on purpose:
+
+* **Its presses last for the session.** In the app the bar writes the grid's own
+  saved document; here the saved document is this card's Lovelace config, and a
+  rendered card cannot write that. So the bar starts from the card's settings and
+  a press lasts until the dashboard is reloaded. Set the value you want to KEEP
+  in the card editor.
+* **Talk is shown disabled, with the reason.** Talk-back goes through the hub's
+  `intercom` capability, and the share token this integration mints for a card
+  (`grid-view`) deliberately does not grant it. The button is not hidden — the
+  app has the feature and you should be told why this surface does not — and it
+  is never shown as live. Use the CamStack app to talk to a camera.
+
+Per-camera **audio, play/pause and talk** are drawn by the player itself, on each
+tile, and have been since the card learned to answer the embed's tile intents.
+The bar's audio picker is the same combinable set, reachable without hunting for
+a tile.
 
 Changing any of this — the arrangement, the columns, the quality, the camera
 list — reaches the wall over the embed's open command channel and **does not

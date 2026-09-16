@@ -121,6 +121,15 @@ async function serve(page) {
         body: cardSource(),
       });
     }
+    if (url.pathname === "/local/camstack-grid-controls.js") {
+      return route.fulfill({
+        contentType: "text/javascript",
+        body: fs.readFileSync(
+          path.join(FRONTEND, "camstack-grid-controls.js"),
+          "utf8"
+        ),
+      });
+    }
     if (url.pathname === "/local/camstack-hub-probe.js") {
       return route.fulfill({
         contentType: "text/javascript",
@@ -375,9 +384,309 @@ async function run() {
       assert.ok(Math.abs(ratio - 3 / 2) < 0.05, `rows ratio ${ratio}, expected 1.5`);
     });
 
+    // ── the `auto` arrangement, which is the default ────────────────────
+    //
+    // The rule is the viewer's `useGridColumns` (`src/hooks/use-responsive.ts`):
+    // 1 column under 700 in portrait, 2 in landscape, 3 to 1100, then 4 + one
+    // per 360, capped at 6. Its narrowest camera is 700/3 ≈ 233 px, and that
+    // floor is the whole promise of the mode.
+    /** The wall as the card actually planned it, at a given card width. */
+    const wall = async (config, cardWidth) =>
+      page.evaluate(
+        async ([cfg, width]) => {
+          const card = document.querySelector("camstack-grid-card");
+          card.style.display = "block";
+          card.style.width = `${width}px`;
+          card.setConfig({ entities: ["camera.front", "camera.back"], ...cfg });
+          card.hass = window.__makeHass();
+          await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+          const root = card.shadowRoot;
+          const frame = root.querySelector("iframe");
+          const scroller = frame.parentElement;
+          const plan = card._plan(card._deviceIds());
+          const frameBox = frame.getBoundingClientRect();
+          return {
+            plan,
+            mode: card._layoutMode(),
+            tileWidth: frameBox.width / (plan.columns === "auto" ? 1 : plan.columns),
+            frameWidth: frameBox.width,
+            scrollerWidth: scroller.getBoundingClientRect().width,
+            frameHeight: frameBox.height,
+            overflowY: getComputedStyle(scroller).overflowY,
+          };
+        },
+        [config, cardWidth]
+      );
+
+    const auto1400 = await wall({ entities: eight }, 1400);
+    check("auto: a card that chose nothing fills the width in readable columns", () => {
+      assert.notEqual(auto1400.overflowY, "auto", "the default arrangement scrolls");
+      assert.ok(
+        auto1400.tileWidth >= 233,
+        `a camera came out ${auto1400.tileWidth}px wide, under the readable floor`
+      );
+      assert.equal(auto1400.mode, "auto");
+      assert.equal(auto1400.plan.columns, 4, "the viewer's rule gives 4 columns at ~1384px");
+      // 8 cameras in 4 columns is 2 rows, and the wall is exactly that tall.
+      const rows = auto1400.frameHeight / (auto1400.tileWidth / (16 / 9));
+      assert.ok(Math.abs(rows - 2) < 0.1, `wall is ${rows} rows tall, expected 2`);
+    });
+
+    // 716 px of card is 700 px of wall once the card's 8px padding is taken —
+    // the viewer's first multi-column breakpoint, on the nose.
+    const auto716 = await wall({ entities: eight }, 716);
+    check("auto: the viewer's 700px breakpoint is the viewer's", () => {
+      assert.equal(auto716.plan.columns, 3);
+      assert.ok(
+        auto716.tileWidth >= 233 - 1,
+        `a camera came out ${auto716.tileWidth}px wide at the 3-column breakpoint`
+      );
+    });
+
+    const auto390 = await wall({ entities: eight }, 390);
+    check("auto: a narrow card gets readable cameras, not eight thumbnails", () => {
+      // The harness window is landscape, which is the viewer's 2-column case.
+      assert.equal(auto390.plan.columns, 2);
+      assert.ok(auto390.tileWidth > 180, `tile is ${auto390.tileWidth}px`);
+      assert.notEqual(auto390.overflowY, "auto");
+    });
+
+    const twenty = Array.from({ length: 20 }, (_, i) => `camera.c${i}`);
+    await page.evaluate((ids) => {
+      const hass = window.__makeHass();
+      ids.forEach((id, i) => {
+        hass.states[id] = { attributes: { camstack_device_id: 200 + i, friendly_name: id } };
+      });
+      window.__makeHass = () => hass;
+    }, twenty);
+    const autoTwenty = await wall({ entities: twenty }, 1400);
+    check("auto: twenty cameras do not shrink below the floor", () => {
+      assert.equal(autoTwenty.plan.columns, 4, "more cameras must not mean thinner ones");
+      assert.ok(autoTwenty.tileWidth >= 233, `${autoTwenty.tileWidth}px per camera`);
+      const rows = autoTwenty.frameHeight / (autoTwenty.tileWidth / (16 / 9));
+      assert.ok(Math.abs(rows - 5) < 0.1, `wall is ${rows} rows tall, expected 5`);
+    });
+
+    const autoOne = await wall({ entities: ["camera.front"] }, 1400);
+    check("auto: one camera is one camera, full width", () => {
+      assert.equal(autoOne.plan.columns, 1);
+      const rows = autoOne.frameHeight / (autoOne.tileWidth / (16 / 9));
+      assert.ok(Math.abs(rows - 1) < 0.1, `one camera drew ${rows} rows`);
+    });
+
+    // A dashboard that already said how its wall is laid out keeps it. The
+    // default is for cards that never chose — not a shape change under a wall
+    // somebody built.
+    const mode = async (cfg) =>
+      page.evaluate((c) => {
+        const card = document.querySelector("camstack-grid-card");
+        card.setConfig({ entities: ["camera.front", "camera.back"], ...c });
+        return card._layoutMode();
+      }, cfg);
+    const modes = {
+      nothing: await mode({}),
+      pinned: await mode({ columns: 2 }),
+      legacyPin: await mode({ layout: 3 }),
+      legacyCap: await mode({ max_visible: 4 }),
+      explicit: await mode({ layout_mode: "flow" }),
+    };
+    check("an arrangement somebody already chose is not replaced", () => {
+      assert.deepEqual(modes, {
+        nothing: "auto",
+        pinned: "fit",
+        legacyPin: "fit",
+        legacyCap: "fixed",
+        explicit: "flow",
+      });
+    });
+
     const fit = await geometry({ entities: eight, layout_mode: "fit" }, 1400);
     check("fit: nothing scrolls — that is the whole promise of the mode", () => {
       assert.notEqual(fit.overflowY, "auto");
+    });
+
+    // ── the bottom control bar (the viewer's grid bar, on a card) ────────
+    //
+    // The viewer's `GridControlBar` is the source of truth for WHAT a wall's
+    // bar contains and in which order (pause · audio · quality · layout ·
+    // highlight menu · active-only). These assertions are about the same set
+    // reaching the same embed commands from a Lovelace card.
+    await page.evaluate(() => {
+      const card = document.querySelector("camstack-grid-card");
+      card.setConfig({ entities: ["camera.front", "camera.back"] });
+      card.hass = window.__makeHass();
+    });
+    await page.waitForTimeout(120);
+
+    const bar = async (selector) =>
+      page.evaluate((sel) => {
+        const root = document.querySelector("camstack-grid-card").shadowRoot;
+        const el = root.querySelector(sel);
+        return el
+          ? {
+              disabled: el.disabled === true,
+              title: el.title || "",
+              text: (el.textContent || "").trim(),
+            }
+          : null;
+      }, selector);
+
+    const press = async (selector) => {
+      await page.evaluate((sel) => {
+        const root = document.querySelector("camstack-grid-card").shadowRoot;
+        const el = root.querySelector(sel);
+        if (!el) throw new Error("no control " + sel);
+        el.click();
+      }, selector);
+      await page.waitForTimeout(60);
+    };
+
+    const order = await page.evaluate(() => {
+      const root = document.querySelector("camstack-grid-card").shadowRoot;
+      return [...root.querySelectorAll('[data-bar="controls"] [data-action]')].map(
+        (el) => el.dataset.action
+      );
+    });
+    check("the bar carries the viewer's control set, in the viewer's order", () => {
+      assert.deepEqual(order, [
+        "pause",
+        "audio",
+        "mic",
+        "quality",
+        "layout",
+        "highlight",
+        "activeOnly",
+      ]);
+    });
+
+    await press('[data-action="pause"]');
+    seen = await commands(page);
+    check("the bar's play/pause pauses the whole wall", () => {
+      assert.deepEqual(seen.at(-1), { kind: "setPaused", value: [11, 22] });
+    });
+    await press('[data-action="pause"]');
+    seen = await commands(page);
+    check("pressing it again resumes the whole wall", () => {
+      assert.deepEqual(seen.at(-1), { kind: "setPaused", value: [] });
+    });
+
+    await press('[data-action="audio"]');
+    await press('[data-row="audio-all"]');
+    seen = await commands(page);
+    check("the audio popover's lead row unmutes every camera", () => {
+      assert.deepEqual(seen.at(-1), { kind: "setAudioOn", value: [11, 22] });
+    });
+    await press('[data-row="audio-11"]');
+    seen = await commands(page);
+    check("audio stays a combinable per-camera set", () => {
+      assert.deepEqual(seen.at(-1), { kind: "setAudioOn", value: [22] });
+    });
+
+    // The mic. `intercom.*` is deliberately NOT in the `grid-view` share
+    // scope (`share-view-access.ts`), so talk-back cannot work behind this
+    // card's credential. It must be VISIBLE and refused with the reason —
+    // never hidden, and never shown as if it were live.
+    await press('[data-action="mic"]');
+    const micRow = await bar('[data-row="mic-11"]');
+    const micButton = await bar('[data-action="mic"]');
+    const beforeMic = (await commands(page)).length;
+    await press('[data-row="mic-11"]');
+    seen = await commands(page);
+    check("the mic is offered, disabled, with the reason", () => {
+      assert.ok(micButton, "no mic control in the bar");
+      assert.ok(micRow, "the mic popover lists no camera");
+      assert.ok(micRow.disabled, "a mic row that cannot work is not disabled");
+      assert.ok(
+        /intercom|share|token|scope/i.test(micRow.title),
+        `the mic row gives no reason: ${micRow.title}`
+      );
+    });
+    check("a disabled mic row commands nothing", () => {
+      assert.equal(seen.length, beforeMic);
+      assert.ok(
+        !seen.some((c) => c.kind === "setActiveMic"),
+        "the card asked for a mic session it cannot have"
+      );
+    });
+
+    // The highlight menu. The shape is the viewer's `GridHighlightSettings`
+    // plus the bar's master `enabled` — `gridHighlightSchema` in the embed.
+    await press('[data-action="highlight"]');
+    await press('[data-row="highlight-master"]');
+    seen = await commands(page);
+    const highlight = seen.filter((c) => c.kind === "setHighlight").at(-1);
+    check("the highlight master pushes the viewer's defaults", () => {
+      assert.ok(highlight, "the highlight menu pushes no setHighlight");
+      assert.equal(highlight.value.enabled, true);
+      assert.equal(highlight.value.motion, true);
+      assert.equal(highlight.value.audio, "off");
+      assert.equal(highlight.value.detection, false);
+      assert.equal(highlight.value.detectionHoldSec, 3);
+      assert.deepEqual(highlight.value.detectionClasses, []);
+    });
+
+    await page.evaluate(() => {
+      const root = document.querySelector("camstack-grid-card").shadowRoot;
+      const select = root.querySelector('[data-row="highlight-audio"]');
+      select.value = "mid";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await page.waitForTimeout(60);
+    seen = await commands(page);
+    const withAudio = seen.filter((c) => c.kind === "setHighlight").at(-1);
+    check("an audio preset is the viewer's meter rung, not a free dB", () => {
+      // `mid` is rung 4 of `AUDIO_LEVEL_THRESHOLDS_DBFS` → -39 dBFS, held for
+      // `AUDIO_HIGHLIGHT_HOLD_SEC` (5 s, not operator-configurable).
+      assert.equal(withAudio.value.audio, "level");
+      assert.equal(withAudio.value.audioDb, -39);
+      assert.equal(withAudio.value.audioHoldSec, 5);
+    });
+
+    await press('[data-action="activeOnly"]');
+    seen = await commands(page);
+    check("active-only rides the open channel", () => {
+      assert.deepEqual(seen.filter((c) => c.kind === "setActiveOnly").at(-1), {
+        kind: "setActiveOnly",
+        value: true,
+      });
+    });
+
+    await press('[data-action="quality"]');
+    await press('[data-row="quality-low"]');
+    seen = await commands(page);
+    check("the quality picker pushes the system tier", () => {
+      assert.deepEqual(seen.filter((c) => c.kind === "setQuality").at(-1), {
+        kind: "setQuality",
+        value: "low",
+      });
+    });
+
+    // A remounted page seeds from a config that is stale by every bar press.
+    await emit(page, { type: "state", state: "ready" });
+    seen = await commands(page);
+    check("a remounted page is told the bar's state too", () => {
+      const last = (kind) => seen.filter((c) => c.kind === kind).at(-1);
+      assert.equal(last("setQuality").value, "low");
+      assert.equal(last("setActiveOnly").value, true);
+      assert.equal(last("setHighlight").value.enabled, true);
+    });
+
+    await page.evaluate(() => {
+      const card = document.querySelector("camstack-grid-card");
+      card.shadowRoot.querySelector('[data-bar="controls"]').dataset.stamp = "bar";
+      for (let i = 0; i < 30; i += 1) {
+        card.hass = window.__makeHass();
+      }
+    });
+    await page.waitForTimeout(200);
+    const barStamp = await page.evaluate(() => {
+      const el = document
+        .querySelector("camstack-grid-card")
+        .shadowRoot.querySelector('[data-bar="controls"]');
+      return el ? el.dataset.stamp : null;
+    });
+    check("the bar is not rebuilt by a set-hass storm", () => {
+      assert.equal(barStamp, "bar", "an open popover would close several times a second");
     });
 
     check("no command was ever posted to a wildcard origin", () => {
