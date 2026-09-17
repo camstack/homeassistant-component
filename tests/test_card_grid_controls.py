@@ -83,7 +83,7 @@ ABSENT_FROM_THE_CARD = {
 
 
 def _bar_actions() -> list[str]:
-    """The bar's buttons, in declaration order, from the `definitions` list."""
+    """Return the bar's buttons, in declaration order, from `definitions`."""
     source = _read(GRID_CONTROLS)
     start = source.index("  const definitions = [")
     body = source[start : source.index("\n  ];", start)]
@@ -223,6 +223,7 @@ def test_the_highlight_vocabulary_matches_the_viewer() -> None:
     card_defaults = dict(
         re.findall(r"^\s*(\w+):\s*([^,\n]+),", card_block.group("body"), re.M)
     )
+
     # TypeScript quotes with `'`, this repo's JavaScript with `"` — a quote
     # style is not a drift.
     def unquote(values: dict[str, str]) -> dict[str, str]:
@@ -332,9 +333,7 @@ def test_only_the_entry_option_grants_talk_back() -> None:
     assert "DEFAULT_TALK_ENABLED" in body, "the default is not the named one"
 
     # AND, never OR: the option grants and the card narrows.
-    granted = re.search(
-        r"granted = \(\s*talk is True(?P<body>.*?)\)\n", mint, re.S
-    )
+    granted = re.search(r"granted = \(\s*talk is True(?P<body>.*?)\)\n", mint, re.S)
     assert granted is not None, "the card's ask and the entry's option are not ANDed"
     assert "async_talk_allowed" in granted.group("body")
 
@@ -470,7 +469,7 @@ def test_a_scrolling_wall_keeps_a_strip_a_finger_can_reach() -> None:
         f"a {gutter}px strip is smaller than a fingertip; the wall stays "
         "unscrollable on every phone"
     )
-    assert f"width:calc(100% - ${{SCROLL_GUTTER_PX}}px)" in source, (
+    assert "width:calc(100% - ${SCROLL_GUTTER_PX}px)" in source, (
         "the frame still covers the whole scroller, so there is nothing to grab"
     )
     start = source.index("  _frameStyle() {")
