@@ -146,7 +146,7 @@ def async_exported_camera_ids(hass: HomeAssistant, entry_id: str) -> set[int]:
 
 
 def async_talk_allowed(hass: HomeAssistant, entry_id: str) -> bool:
-    """Does THIS entry allow talk-back through a card's share token?
+    """Report whether THIS entry allows talk-back through a card's share token.
 
     The one authority (D62's rule applied to an integration-wide function: the
     switch stores nothing of its own, it reads the thing that already owns the

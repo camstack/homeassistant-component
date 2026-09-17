@@ -72,8 +72,13 @@ VIEWER_KEY = {"highlight": "menu"}
 # from "nobody noticed", exactly as the ignored embed messages are.
 ABSENT_FROM_THE_CARD = {
     "timeline": "this card mounts no timeline, so there is no chrome to show or hide",
-    "share": "the standalone share link is a viewer surface; a dashboard shares its own way",
-    "edit": "the grid builder is a viewer surface; this wall's membership is the Lovelace config",
+    "share": (
+        "the standalone share link is a viewer surface; a dashboard shares its own way"
+    ),
+    "edit": (
+        "the grid builder is a viewer surface; this wall's membership is the "
+        "Lovelace config"
+    ),
 }
 
 
