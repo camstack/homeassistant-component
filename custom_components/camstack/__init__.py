@@ -149,7 +149,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: CamStackConfigEntry) ->
     # The cached share tokens are minted against THIS entry's hub credential.
     # Keeping them past an unload would hand a reloaded entry — possibly now
     # pointing at a different hub — a credential for the old one.
-    async_forget_entry_tokens(hass, entry.entry_id)
+    await async_forget_entry_tokens(hass, entry.entry_id)
     runtime = getattr(entry, "runtime_data", None)
     if isinstance(runtime, CamStackRuntimeData):
         runtime.push.async_stop()

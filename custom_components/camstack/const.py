@@ -233,6 +233,11 @@ STORAGE_KEY: Final = "camstack.push"
 STORAGE_VERSION: Final = 1
 STORAGE_SAVE_DELAY: Final = 30
 
+# Minted embed share tokens (`csv_…`) — process cache alone reminted on every
+# Home Assistant restart and flooded `share_view_tokens` on the hub.
+EMBED_TOKEN_STORAGE_KEY: Final = "camstack.embed_tokens"
+EMBED_TOKEN_STORAGE_VERSION: Final = 1
+
 # Membership is structure, not value, so it is read on a slow timer rather
 # than polled: the hub announces entities, and this only decides which cameras
 # get a `camera` entity (the one thing the push catalog does not carry).

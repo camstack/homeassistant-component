@@ -17,10 +17,12 @@ Two guards live here rather than on the hub:
   camera. Without that, any Home Assistant user could ask for a token against
   any device id the linked hub account can see, and the card would be a
   general-purpose minting endpoint for the whole hub.
-* the token is **cached per (entry, kind, device ids)** until shortly before it
-  expires. A card re-renders whenever `hass` updates — several times a second
-  on a busy instance — and minting per render would write a row into the hub's
-  `share_view_tokens` table each time, forever.
+* the token is **cached per (entry, kind, device ids, talk)** until shortly
+  before it expires. A card re-renders whenever `hass` updates — several times
+  a second on a busy instance — and minting per render would write a row into
+  the hub's `share_view_tokens` table each time, forever. The cache is also
+  persisted with `helpers.storage.Store` so a Home Assistant restart does not
+  remint every card and flood the hub with duplicate share links.
 
 ## Where the token goes
 
@@ -49,6 +51,7 @@ from typing import Any
 from aiohttp import web
 from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .api import CamStackError
@@ -56,6 +59,8 @@ from .const import (
     CONF_TALK_ENABLED,
     DEFAULT_TALK_ENABLED,
     DOMAIN,
+    EMBED_TOKEN_STORAGE_KEY,
+    EMBED_TOKEN_STORAGE_VERSION,
     EMBED_TOKEN_VIEW_URL,
     SHARE_SCOPE_GRID,
     SHARE_SCOPE_KINDS,
@@ -70,6 +75,8 @@ _LOGGER = logging.getLogger(__name__)
 
 _VIEW_REGISTERED = f"{DOMAIN}_embed_token_view_registered"
 _CACHE = f"{DOMAIN}_embed_token_cache"
+_STORE = f"{DOMAIN}_embed_token_store"
+_LOADED = f"{DOMAIN}_embed_token_loaded"
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +93,28 @@ class MintedToken:
             return True
         return self.expires_at - now > SHARE_TOKEN_RENEW_MARGIN.total_seconds()
 
+    def to_storage(self) -> dict[str, Any]:
+        """Serialize for the Store."""
+        return {"token": self.token, "expires_at": self.expires_at}
+
+    @staticmethod
+    def from_storage(raw: Any) -> MintedToken | None:
+        """Read a MintedToken from a Store row, or None when unusable."""
+        if not isinstance(raw, dict):
+            return None
+        token = raw.get("token")
+        if not isinstance(token, str) or not token:
+            return None
+        expires_raw = raw.get("expires_at")
+        expires_at: float | None
+        if expires_raw is None:
+            expires_at = None
+        elif isinstance(expires_raw, int | float) and not isinstance(expires_raw, bool):
+            expires_at = float(expires_raw)
+        else:
+            return None
+        return MintedToken(token=token, expires_at=expires_at)
+
 
 def async_register_embed_token_view(hass: HomeAssistant) -> None:
     """Register the minting endpoint, once per Home Assistant."""
@@ -95,16 +124,76 @@ def async_register_embed_token_view(hass: HomeAssistant) -> None:
     hass.data[_VIEW_REGISTERED] = True
 
 
-def _cache(hass: HomeAssistant) -> dict[tuple[str, str, tuple[int, ...]], MintedToken]:
-    """Return the process-wide mint cache, creating it on first use."""
+def _memory(hass: HomeAssistant) -> dict[str, MintedToken]:
+    """Return the in-process mint cache, creating it on first use."""
     return hass.data.setdefault(_CACHE, {})
 
 
-def async_forget_entry_tokens(hass: HomeAssistant, entry_id: str) -> None:
+def _store(hass: HomeAssistant) -> Store[dict[str, Any]]:
+    """Return the persistent mint Store, creating it on first use."""
+    existing = hass.data.get(_STORE)
+    if existing is not None:
+        return existing
+    store: Store[dict[str, Any]] = Store(
+        hass, EMBED_TOKEN_STORAGE_VERSION, EMBED_TOKEN_STORAGE_KEY
+    )
+    hass.data[_STORE] = store
+    return store
+
+
+def _cache_key(
+    entry_id: str, kind: str, device_ids: tuple[int, ...], talk: bool
+) -> str:
+    """Stable Store / memory key for one mint scope."""
+    ids = ",".join(str(device_id) for device_id in device_ids)
+    return f"{entry_id}|{kind}|{ids}|{'1' if talk else '0'}"
+
+
+async def _async_ensure_loaded(hass: HomeAssistant) -> dict[str, MintedToken]:
+    """Load the Store into memory once per process, then return the memory map."""
+    cache = _memory(hass)
+    if hass.data.get(_LOADED):
+        return cache
+    stored = await _store(hass).async_load()
+    hass.data[_LOADED] = True
+    if not isinstance(stored, dict):
+        return cache
+    tokens = stored.get("tokens")
+    if not isinstance(tokens, dict):
+        return cache
+    now = dt_util.utcnow().timestamp()
+    for key, raw in tokens.items():
+        if not isinstance(key, str):
+            continue
+        minted = MintedToken.from_storage(raw)
+        if minted is None or not minted.is_usable(now):
+            continue
+        cache[key] = minted
+    _LOGGER.debug("Restored %d usable embed share token(s) from Store", len(cache))
+    return cache
+
+
+async def _async_persist(hass: HomeAssistant) -> None:
+    """Write the in-memory cache to the Store (usable tokens only)."""
+    cache = _memory(hass)
+    now = dt_util.utcnow().timestamp()
+    payload = {
+        "tokens": {
+            key: minted.to_storage()
+            for key, minted in cache.items()
+            if minted.is_usable(now)
+        }
+    }
+    await _store(hass).async_save(payload)
+
+
+async def async_forget_entry_tokens(hass: HomeAssistant, entry_id: str) -> None:
     """Drop every token minted for an entry that is going away."""
-    cache = _cache(hass)
-    for key in [key for key in cache if key[0] == entry_id]:
+    cache = await _async_ensure_loaded(hass)
+    prefix = f"{entry_id}|"
+    for key in [key for key in cache if key.startswith(prefix)]:
         del cache[key]
+    await _async_persist(hass)
     async_forget_entry_grants(hass, entry_id)
 
 
@@ -267,19 +356,21 @@ class CamStackEmbedTokenView(HomeAssistantView):
         direct: bool,
         talk: bool,
     ) -> web.Response:
-        """Return a cached token, or mint one and cache it."""
-        cache = _cache(hass)
+        """Return a cached token, or mint one and cache it (memory + Store)."""
+        cache = await _async_ensure_loaded(hass)
         # `talk` is part of the KEY, not a detail of the answer: two tokens for
         # the same cameras are different credentials when one of them can speak
         # into the house. Without it the first mint of a scope would be handed
         # back to every later request for it — a card that never asked for
         # talk-back would be given a talking token, and a card that did would be
         # given a silent one and look broken.
-        key = (entry_id, kind, tuple(device_ids), talk)
+        key = _cache_key(entry_id, kind, tuple(device_ids), talk)
         now = dt_util.utcnow().timestamp()
         cached = cache.get(key)
         if cached is not None and cached.is_usable(now):
-            return self.json(_answer(hass, entry_id, key, cached, direct))
+            return self.json(
+                _answer(hass, entry_id, kind, tuple(device_ids), talk, cached, direct)
+            )
 
         entry = hass.config_entries.async_get_entry(entry_id)
         client = getattr(getattr(entry, "runtime_data", None), "client", None)
@@ -312,13 +403,18 @@ class CamStackEmbedTokenView(HomeAssistantView):
         if minted is None:
             return self.json_message("the hub returned no share token", 502)
         cache[key] = minted
-        return self.json(_answer(hass, entry_id, key, minted, direct))
+        await _async_persist(hass)
+        return self.json(
+            _answer(hass, entry_id, kind, tuple(device_ids), talk, minted, direct)
+        )
 
 
 def _answer(
     hass: HomeAssistant,
     entry_id: str,
-    key: tuple[str, str, tuple[int, ...], bool],
+    kind: str,
+    device_ids: tuple[int, ...],
+    talk: bool,
     minted: MintedToken,
     direct: bool,
 ) -> dict[str, Any]:
@@ -338,7 +434,7 @@ def _answer(
     # cache's: the grant id is what the browser carries, and two scopes that
     # differ only by talk-back sharing one id would mean the relay injecting
     # whichever of the two tokens was issued last.
-    scope_key = (key[0], key[1], *map(str, key[2]), "talk" if key[3] else "no-talk")
+    scope_key = (entry_id, kind, *map(str, device_ids), "talk" if talk else "no-talk")
     grant_id = async_issue_grant(
         hass, entry_id, scope_key, minted.token, minted.expires_at
     )
@@ -350,7 +446,7 @@ def _answer(
         # refused must be able to say WHY — "the integration has talk-back off"
         # is an answer an operator can act on; a talk button that fails at the
         # hub is not.
-        "talk": key[3],
+        "talk": talk,
     }
 
 

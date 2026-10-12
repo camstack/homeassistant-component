@@ -524,3 +524,50 @@ async def test_direct_must_be_a_boolean(
     )
 
     assert response.status == 400
+
+
+async def test_mint_cache_survives_a_home_assistant_restart(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hass_client: ClientSessionGenerator,
+) -> None:
+    """A process-only cache reminted every restart and flooded the hub.
+
+    After the first mint the Store holds the token. Clearing the in-memory
+    cache (what a restart does) must still serve the stored token and must
+    NOT call `auth.createShareToken` again.
+    """
+    from custom_components.camstack import embed_token as et
+
+    await setup_integration(hass, config_entry)
+    mock_client.mutate.reset_mock()
+    mock_client.mutate.return_value = minted()
+    client = await hass_client()
+
+    first = await post(
+        client, {"kind": "grid-view", "device_ids": [EXPORTED], "direct": True}
+    )
+    assert (await first.json())["token"] == "csv_deadbeef"
+    assert mock_client.mutate.await_count == 1
+
+    # Simulate a Home Assistant restart: memory is gone, Store is not.
+    hass.data.pop(et._CACHE, None)
+    hass.data.pop(et._LOADED, None)
+
+    second = await post(
+        client, {"kind": "grid-view", "device_ids": [EXPORTED], "direct": True}
+    )
+    assert (await second.json())["token"] == "csv_deadbeef"
+    assert mock_client.mutate.await_count == 1
+
+
+def test_minted_token_store_round_trip() -> None:
+    """Store serialization keeps token + expiry, and rejects junk."""
+    from custom_components.camstack.embed_token import MintedToken
+
+    original = MintedToken(token="csv_abc", expires_at=1_700_000_000.0)
+    restored = MintedToken.from_storage(original.to_storage())
+    assert restored == original
+    assert MintedToken.from_storage({"token": ""}) is None
+    assert MintedToken.from_storage("nope") is None
