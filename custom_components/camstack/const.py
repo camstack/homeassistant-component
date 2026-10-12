@@ -125,9 +125,12 @@ MOUNT_PROBE_READ_BYTES: Final = 16_384
 # not fail on a token that was valid when the page composed it.
 PROXY_GRANT_GRACE: Final = timedelta(minutes=1)
 
-# The hub's minting mutation, and the two scope kinds it accepts.
+# The hub's minting / extend mutations, and the two scope kinds it accepts.
 # `auth.createShareToken` -> `{ id, token, expiresAt }`.
+# `auth.extendShareToken` -> `{ id, expiresAt }` (same `csv_*`, slid expiry).
 SHARE_TOKEN_MUTATION: Final = "auth.createShareToken"
+SHARE_TOKEN_EXTEND_MUTATION: Final = "auth.extendShareToken"
+SHARE_TOKEN_REVOKE_MUTATION: Final = "auth.revokeShareToken"
 SHARE_SCOPE_GRID: Final = "grid-view"
 SHARE_SCOPE_EVENTS: Final = "events-view"
 SHARE_SCOPE_KINDS: Final = frozenset({SHARE_SCOPE_GRID, SHARE_SCOPE_EVENTS})
@@ -137,12 +140,14 @@ SHARE_SCOPE_KINDS: Final = frozenset({SHARE_SCOPE_GRID, SHARE_SCOPE_EVENTS})
 # would surface as an opaque BAD_REQUEST on a dashboard.
 SHARE_SCOPE_MAX_DEVICES: Final = 64
 
-# A share token is a BEARER credential that leaves Home Assistant: it lives in
-# the browser of whoever opens the dashboard, and it is valid against the hub
-# on its own. So it is short-lived and re-minted, never `ttlSec: "never"`.
-SHARE_TOKEN_TTL: Final = timedelta(hours=1)
-# Re-mint this long before expiry, so a card that has been open all along does
-# not hand its iframe a credential that dies mid-stream.
+# A share token is a BEARER credential that can leave Home Assistant on the
+# direct path. On the default relay path it stays inside HA, but Identity's
+# share-link list still grows if we mint forever — so we use a 3 h TTL and
+# EXTEND the same row near expiry instead of creating a new `csv_*` each time.
+# Never `ttlSec: "never"` from this integration.
+SHARE_TOKEN_TTL: Final = timedelta(hours=3)
+# Extend (or replace) this long before expiry, so a card that has been open
+# all along does not hand its iframe a credential that dies mid-stream.
 SHARE_TOKEN_RENEW_MARGIN: Final = timedelta(minutes=5)
 
 MANUFACTURER: Final = "CamStack"

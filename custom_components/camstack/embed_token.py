@@ -33,13 +33,14 @@ forwarded request — HTTP and the WebSocket upgrade alike. A second copy of tha
 credential in the page authenticates nothing there and costs plenty: it used to
 sit in the events iframe's `#t=` fragment, i.e. in browser history and in every
 screenshot of the dashboard, and anyone who could read it could use it against
-the hub from outside Home Assistant for the rest of its hour. What the browser
+the hub from outside Home Assistant for the rest of its TTL. What the browser
 gets instead is the grant id — same-origin, revocable, dead when the token
 dies.
 
-The tokens are deliberately short-lived. `ttlSec: "never"` exists on the hub
-and is not used: a bearer credential that has left Home Assistant can only be
-taken back by expiring or by revocation, and nothing here would ever revoke.
+The tokens are deliberately short-lived (3 h) and EXTENDED in place near
+expiry so Identity does not fill with duplicate HA rows. `ttlSec: "never"`
+exists on the hub and is not used: a bearer that has left Home Assistant can
+only be taken back by expiring or by revocation.
 """
 
 from __future__ import annotations
@@ -65,8 +66,10 @@ from .const import (
     SHARE_SCOPE_GRID,
     SHARE_SCOPE_KINDS,
     SHARE_SCOPE_MAX_DEVICES,
+    SHARE_TOKEN_EXTEND_MUTATION,
     SHARE_TOKEN_MUTATION,
     SHARE_TOKEN_RENEW_MARGIN,
+    SHARE_TOKEN_REVOKE_MUTATION,
     SHARE_TOKEN_TTL,
 )
 from .proxy import async_forget_entry_grants, async_issue_grant, proxy_base_for
@@ -86,6 +89,8 @@ class MintedToken:
     token: str
     #: Epoch seconds, or None when the hub issued a token that never expires.
     expires_at: float | None
+    #: Hub share-token row id — required to call `extendShareToken`.
+    id: str | None = None
 
     def is_usable(self, now: float) -> bool:
         """Return whether this token still has more than the margin left."""
@@ -93,9 +98,18 @@ class MintedToken:
             return True
         return self.expires_at - now > SHARE_TOKEN_RENEW_MARGIN.total_seconds()
 
+    def is_still_valid_on_hub(self, now: float) -> bool:
+        """Return whether the hub would still accept this token (no margin)."""
+        if self.expires_at is None:
+            return True
+        return self.expires_at > now
+
     def to_storage(self) -> dict[str, Any]:
         """Serialize for the Store."""
-        return {"token": self.token, "expires_at": self.expires_at}
+        payload: dict[str, Any] = {"token": self.token, "expires_at": self.expires_at}
+        if self.id is not None:
+            payload["id"] = self.id
+        return payload
 
     @staticmethod
     def from_storage(raw: Any) -> MintedToken | None:
@@ -113,7 +127,9 @@ class MintedToken:
             expires_at = float(expires_raw)
         else:
             return None
-        return MintedToken(token=token, expires_at=expires_at)
+        id_raw = raw.get("id")
+        token_id: str | None = id_raw if isinstance(id_raw, str) and id_raw else None
+        return MintedToken(token=token, expires_at=expires_at, id=token_id)
 
 
 def async_register_embed_token_view(hass: HomeAssistant) -> None:
@@ -166,22 +182,24 @@ async def _async_ensure_loaded(hass: HomeAssistant) -> dict[str, MintedToken]:
         if not isinstance(key, str):
             continue
         minted = MintedToken.from_storage(raw)
-        if minted is None or not minted.is_usable(now):
+        # Keep tokens that are past the renew margin but still valid on the
+        # hub — `_async_answer` EXTENDS those instead of minting a new csv_*.
+        if minted is None or not minted.is_still_valid_on_hub(now):
             continue
         cache[key] = minted
-    _LOGGER.debug("Restored %d usable embed share token(s) from Store", len(cache))
+    _LOGGER.debug("Restored %d embed share token(s) from Store", len(cache))
     return cache
 
 
 async def _async_persist(hass: HomeAssistant) -> None:
-    """Write the in-memory cache to the Store (usable tokens only)."""
+    """Write the in-memory cache to the Store (hub-valid tokens only)."""
     cache = _memory(hass)
     now = dt_util.utcnow().timestamp()
     payload = {
         "tokens": {
             key: minted.to_storage()
             for key, minted in cache.items()
-            if minted.is_usable(now)
+            if minted.is_still_valid_on_hub(now)
         }
     }
     await _store(hass).async_save(payload)
@@ -377,6 +395,37 @@ class CamStackEmbedTokenView(HomeAssistantView):
         if client is None:
             return self.json_message("the CamStack entry is not loaded", 503)
 
+        ttl_sec = int(SHARE_TOKEN_TTL.total_seconds())
+        # Near expiry (or already past the margin): prefer EXTEND so Identity
+        # does not accumulate a new share-link row every few hours. Only mint
+        # a replacement when the hub says the row is gone or expired.
+        if (
+            cached is not None
+            and cached.id is not None
+            and cached.is_still_valid_on_hub(now)
+        ):
+            try:
+                extended = await client.mutate(
+                    SHARE_TOKEN_EXTEND_MUTATION,
+                    {"id": cached.id, "ttlSec": ttl_sec},
+                )
+            except CamStackError as err:
+                _LOGGER.info(
+                    "CamStack refused to extend embed token %s — will replace: %s",
+                    cached.id,
+                    err,
+                )
+            else:
+                renewed = _read_extended(cached, extended)
+                if renewed is not None:
+                    cache[key] = renewed
+                    await _async_persist(hass)
+                    return self.json(
+                        _answer(
+                            hass, entry_id, kind, tuple(device_ids), talk, renewed, direct
+                        )
+                    )
+
         payload = {
             "scope": {
                 "kind": kind,
@@ -388,7 +437,7 @@ class CamStackEmbedTokenView(HomeAssistantView):
                 # called, never WHICH cameras — `deviceIds` still gates it.
                 **({"talk": True} if talk else {}),
             },
-            "ttlSec": int(SHARE_TOKEN_TTL.total_seconds()),
+            "ttlSec": ttl_sec,
         }
         try:
             result = await client.mutate(SHARE_TOKEN_MUTATION, payload)
@@ -402,6 +451,14 @@ class CamStackEmbedTokenView(HomeAssistantView):
         minted = _read_minted(result)
         if minted is None:
             return self.json_message("the hub returned no share token", 502)
+        old_id = cached.id if cached is not None else None
+        if old_id is not None and old_id != minted.id:
+            try:
+                await client.mutate(SHARE_TOKEN_REVOKE_MUTATION, {"id": old_id})
+            except CamStackError as err:
+                _LOGGER.debug(
+                    "Could not revoke replaced embed token %s: %s", old_id, err
+                )
         cache[key] = minted
         await _async_persist(hass)
         return self.json(
@@ -451,16 +508,38 @@ def _answer(
 
 
 def _read_minted(result: Any) -> MintedToken | None:
-    """Read `{ token, expiresAt }` off the hub's answer."""
+    """Read `{ id, token, expiresAt }` off the hub's create answer."""
     if not isinstance(result, dict):
         return None
     token = result.get("token")
     if not isinstance(token, str) or not token:
         return None
+    id_raw = result.get("id")
+    token_id: str | None = id_raw if isinstance(id_raw, str) and id_raw else None
     raw_expiry = result.get("expiresAt")
     expires_at: float | None = None
     if isinstance(raw_expiry, int | float) and not isinstance(raw_expiry, bool):
         # The hub reports epoch MILLISECONDS. A value read as seconds would sit
         # 55 000 years in the future and the token would never be re-minted.
         expires_at = float(raw_expiry) / 1000.0
-    return MintedToken(token=token, expires_at=expires_at)
+    return MintedToken(token=token, expires_at=expires_at, id=token_id)
+
+
+def _read_extended(previous: MintedToken, result: Any) -> MintedToken | None:
+    """Apply `{ id, expiresAt }` from extend onto the cached credential."""
+    if not isinstance(result, dict):
+        return None
+    raw_expiry = result.get("expiresAt")
+    if not isinstance(raw_expiry, int | float) or isinstance(raw_expiry, bool):
+        return None
+    id_raw = result.get("id")
+    token_id = (
+        id_raw
+        if isinstance(id_raw, str) and id_raw
+        else previous.id
+    )
+    return MintedToken(
+        token=previous.token,
+        expires_at=float(raw_expiry) / 1000.0,
+        id=token_id,
+    )

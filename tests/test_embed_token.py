@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
@@ -12,6 +13,7 @@ from custom_components.camstack.api import CamStackForbiddenError
 from custom_components.camstack.const import (
     CONF_TALK_ENABLED,
     EMBED_TOKEN_VIEW_URL,
+    SHARE_TOKEN_EXTEND_MUTATION,
     SHARE_TOKEN_MUTATION,
     SHARE_TOKEN_TTL,
 )
@@ -563,11 +565,76 @@ async def test_mint_cache_survives_a_home_assistant_restart(
 
 
 def test_minted_token_store_round_trip() -> None:
-    """Store serialization keeps token + expiry, and rejects junk."""
+    """Store serialization keeps token + expiry + id, and rejects junk."""
     from custom_components.camstack.embed_token import MintedToken
 
-    original = MintedToken(token="csv_abc", expires_at=1_700_000_000.0)
+    original = MintedToken(token="csv_abc", expires_at=1_700_000_000.0, id="tok1")
     restored = MintedToken.from_storage(original.to_storage())
     assert restored == original
     assert MintedToken.from_storage({"token": ""}) is None
     assert MintedToken.from_storage("nope") is None
+
+
+def test_share_token_ttl_is_three_hours() -> None:
+    """Embed mints ask the hub for three hours, not one."""
+    assert int(SHARE_TOKEN_TTL.total_seconds()) == 3 * 60 * 60
+
+
+async def test_near_expiry_extends_instead_of_minting_again(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    hass_client: ClientSessionGenerator,
+) -> None:
+    """Within the renew margin the same csv_* is extended, not replaced."""
+    from custom_components.camstack import embed_token as et
+    from custom_components.camstack.const import SHARE_TOKEN_RENEW_MARGIN
+    from homeassistant.util import dt as dt_util
+
+    await setup_integration(hass, config_entry)
+    now = dt_util.utcnow().timestamp()
+    # Still valid on the hub, but inside the renew margin → extend path.
+    expires_at_sec = now + SHARE_TOKEN_RENEW_MARGIN.total_seconds() / 2
+    mock_client.mutate.reset_mock()
+
+    async def mutate(name: str, payload: dict[str, object]) -> dict[str, object]:
+        if name == SHARE_TOKEN_MUTATION:
+            return {
+                "id": "tok1",
+                "token": "csv_deadbeef",
+                "expiresAt": int(expires_at_sec * 1000),
+            }
+        if name == SHARE_TOKEN_EXTEND_MUTATION:
+            return {
+                "id": "tok1",
+                "expiresAt": int((now + 3 * 3600) * 1000),
+            }
+        raise AssertionError(f"unexpected mutation {name}")
+
+    mock_client.mutate.side_effect = mutate
+    client = await hass_client()
+
+    first = await post(
+        client, {"kind": "grid-view", "device_ids": [EXPORTED], "direct": True}
+    )
+    assert (await first.json())["token"] == "csv_deadbeef"
+    assert mock_client.mutate.await_args_list[0].args[0] == SHARE_TOKEN_MUTATION
+
+    # Force the in-memory cache into the renew margin (same as first mint).
+    cache = hass.data[et._CACHE]
+    key = next(iter(cache))
+    cache[key] = et.MintedToken(
+        token="csv_deadbeef",
+        expires_at=expires_at_sec,
+        id="tok1",
+    )
+
+    second = await post(
+        client, {"kind": "grid-view", "device_ids": [EXPORTED], "direct": True}
+    )
+    body = await second.json()
+    assert body["token"] == "csv_deadbeef"
+    assert body["expires_at"] == pytest.approx(now + 3 * 3600, abs=5)
+    names = [call.args[0] for call in mock_client.mutate.await_args_list]
+    assert SHARE_TOKEN_EXTEND_MUTATION in names
+    assert names.count(SHARE_TOKEN_MUTATION) == 1
