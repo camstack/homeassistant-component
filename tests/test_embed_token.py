@@ -587,9 +587,10 @@ async def test_near_expiry_extends_instead_of_minting_again(
     hass_client: ClientSessionGenerator,
 ) -> None:
     """Within the renew margin the same csv_* is extended, not replaced."""
+    from homeassistant.util import dt as dt_util
+
     from custom_components.camstack import embed_token as et
     from custom_components.camstack.const import SHARE_TOKEN_RENEW_MARGIN
-    from homeassistant.util import dt as dt_util
 
     await setup_integration(hass, config_entry)
     now = dt_util.utcnow().timestamp()

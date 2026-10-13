@@ -422,7 +422,13 @@ class CamStackEmbedTokenView(HomeAssistantView):
                     await _async_persist(hass)
                     return self.json(
                         _answer(
-                            hass, entry_id, kind, tuple(device_ids), talk, renewed, direct
+                            hass,
+                            entry_id,
+                            kind,
+                            tuple(device_ids),
+                            talk,
+                            renewed,
+                            direct,
                         )
                     )
 
