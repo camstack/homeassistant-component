@@ -539,11 +539,7 @@ def _read_extended(previous: MintedToken, result: Any) -> MintedToken | None:
     if not isinstance(raw_expiry, int | float) or isinstance(raw_expiry, bool):
         return None
     id_raw = result.get("id")
-    token_id = (
-        id_raw
-        if isinstance(id_raw, str) and id_raw
-        else previous.id
-    )
+    token_id = id_raw if isinstance(id_raw, str) and id_raw else previous.id
     return MintedToken(
         token=previous.token,
         expires_at=float(raw_expiry) / 1000.0,
