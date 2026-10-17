@@ -16,14 +16,14 @@ permissions:
 jobs:
   hassfest:
     name: hassfest
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, amd-proxmox]
     steps:
       - uses: actions/checkout@v4
       - uses: home-assistant/actions/hassfest@master
 
   hacs:
     name: HACS
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, amd-proxmox]
     steps:
       - uses: actions/checkout@v4
       - uses: hacs/action@main
@@ -33,7 +33,7 @@ jobs:
 
   lint:
     name: ruff
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, amd-proxmox]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/ruff-action@v3
@@ -47,7 +47,7 @@ jobs:
     # Each Python version pins a different Home Assistant generation, so this
     # matrix is what proves the integration works on both.
     name: pytest (HA via py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, amd-proxmox]
     strategy:
       fail-fast: false
       matrix:
@@ -62,7 +62,7 @@ jobs:
 
   release:
     name: release
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, amd-proxmox]
     needs: [hassfest, hacs, lint, tests]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
