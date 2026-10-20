@@ -153,6 +153,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: CamStackConfigEntry) ->
     runtime = getattr(entry, "runtime_data", None)
     if isinstance(runtime, CamStackRuntimeData):
         runtime.push.async_stop()
+        await runtime.push.async_flush()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 

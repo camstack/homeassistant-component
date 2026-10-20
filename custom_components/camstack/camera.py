@@ -48,6 +48,7 @@ from homeassistant.components.camera.webrtc import (
 )
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -79,18 +80,29 @@ async def async_setup_entry(
     )
 
     coordinator = entry.runtime_data.coordinator
-    known: set[int] = set()
+    registry = er.async_get(hass)
 
     @callback
     def _async_add_new() -> None:
-        """Add the primary entity for cameras exported since the last read."""
+        """Add the primary entity of every exported camera that has none.
+
+        Asked of the entity registry on every read, not remembered: a remembered
+        set kept a camera whose entity had been removed (a pruned device, a
+        manual delete) absent for good, until the next restart.
+        """
         data = coordinator.data
         if data is None:
             return
-        fresh = [camera for camera in data.cameras() if camera.device_id not in known]
+        fresh = [
+            camera
+            for camera in data.cameras()
+            if registry.async_get_entity_id(
+                Platform.CAMERA, DOMAIN, f"{DOMAIN}_{camera.device_id}_camera"
+            )
+            is None
+        ]
         if not fresh:
             return
-        known.update(camera.device_id for camera in fresh)
         async_add_entities(CamStackCamera(coordinator, camera) for camera in fresh)
 
     _async_add_new()

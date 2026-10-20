@@ -143,6 +143,10 @@ class CamStackPushHub:
             str, tuple[EntityFactory, AddConfigEntryEntitiesCallback]
         ] = {}
         self._unsupported: set[str] = set()
+        # (platform, unique_id) of every entity running on a platform.
+        # Reconciliation asks this and the entity registry what EXISTS,
+        # never the stored set, which only says what the hub announced.
+        self._live: set[tuple[str, str]] = set()
         self._cancel_watchdog: Callable[[], None] | None = None
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry.entry_id}"
@@ -198,6 +202,15 @@ class CamStackPushHub:
             self._cancel_watchdog()
             self._cancel_watchdog = None
 
+    async def async_flush(self) -> None:
+        """Write the snapshot now.
+
+        The delayed save would otherwise still be pending when a reload builds
+        a fresh hub, which then loaded an older (or empty) store and rebuilt
+        nothing: a reload alone did not restore the entities.
+        """
+        await self._store.async_save(self._data_to_save())
+
     # --- what the entities read -------------------------------------------
 
     @property
@@ -251,7 +264,49 @@ class CamStackPushHub:
             for component_key, component in cmps.items()
             if component.get("platform") == platform.value
         ]
-        self._async_add(pending)
+        self._async_add(self._async_missing(pending))
+
+    @callback
+    def async_entity_added(self, platform: str, unique_id: str) -> None:
+        """Record that an entity now exists on a platform."""
+        self._live.add((platform, unique_id))
+
+    @callback
+    def async_entity_removed(self, platform: str, unique_id: str) -> None:
+        """Record that an entity left its platform."""
+        self._live.discard((platform, unique_id))
+
+    @callback
+    def _async_missing(self, keys: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+        """Return the components that have no entity, whatever the store says.
+
+        The stored set is the hub's last announcement, not a statement about
+        Home Assistant. An entity can be gone from the registry (a removal on
+        a smaller announce, a pruned device, a manual delete) while its
+        component is still announced, and diffing announce against announce
+        then never rebuilds it. So a component is missing when the registry
+        has no entry for its unique_id, or the entry is enabled but no entity
+        is running on it. An entry the OPERATOR disabled is deliberately not
+        missing: re-creating it would silently undo their choice.
+        """
+        registry = er.async_get(self.hass)
+        missing: list[tuple[str, str]] = []
+        for device_key, component_key in keys:
+            component = self.component(device_key, component_key)
+            platform = component.get("platform")
+            if not isinstance(platform, str):
+                continue
+            unique_id = push_unique_id(device_key, component_key, component)
+            entity_id = registry.async_get_entity_id(platform, DOMAIN, unique_id)
+            if entity_id is None:
+                missing.append((device_key, component_key))
+                continue
+            entry = registry.async_get(entity_id)
+            if entry is None or entry.disabled_by is not None:
+                continue
+            if (platform, unique_id) not in self._live:
+                missing.append((device_key, component_key))
+        return missing
 
     @callback
     def _async_add(self, keys: Iterable[tuple[str, str]]) -> None:
@@ -378,6 +433,13 @@ class CamStackPushHub:
             key: value for key, value in cmps.items() if isinstance(value, dict)
         }
         previous = self.components.get(device_key, {})
+        # `full: true` is the hub saying this is the authoritative set;
+        # `partial: true` / `full: false` say it is not. Without either the
+        # message is a snapshot as before. A partial announce must never
+        # remove: it is a statement about some components, not about absence.
+        partial = message.get("partial") is True or message.get("full") is False
+        if partial:
+            incoming = {**previous, **incoming}
         self.devices[device_key] = PushDevice.from_payload(
             device_key, message.get("dev")
         )
@@ -392,10 +454,13 @@ class CamStackPushHub:
                 gone[
                     push_unique_id(device_key, component_key, previous[component_key])
                 ] = entity_id
-        added = set(incoming) - set(previous)
-        if added:
-            self._async_add((device_key, key) for key in added)
-        self._async_report_migrations(device_key, gone, incoming, added)
+        # Reconcile against what EXISTS: everything announced that has no
+        # live entity is (re)built, whether or not it was in the last set.
+        missing = self._async_missing((device_key, key) for key in incoming)
+        added = {key for _device, key in missing}
+        if missing:
+            self._async_add(missing)
+        self._async_report_migrations(device_key, gone, incoming, added - set(previous))
         if removed or added:
             _LOGGER.debug(
                 "%s: %d entities (+%d, -%d)",
