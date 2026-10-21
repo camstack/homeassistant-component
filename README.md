@@ -302,7 +302,7 @@ blocks an iframe silently — no error, no interstitial, and the Home Assistant
 apps offer no exception to click through. So the integration relays: the
 embed page, tRPC (HTTP and WebSocket) and the media routes are served under
 `/api/camstack/p/<grant>/…` on Home Assistant's own origin, with the card's
-device-scoped share token injected. Video itself is WebRTC between the
+device-scoped view token injected. Video itself is WebRTC between the
 browser and the hub and never crosses Home Assistant. The grant is handed out
 with the token to authenticated users only, dies with it, and reaches nothing
 the token cannot.
@@ -453,8 +453,9 @@ check — the operator's decision). A tick box on a card alone would therefore
 mean that editing a dashboard hands you the microphone of the house. A card can
 only **decline** what the integration allows, with `talk: false`.
 
-How it travels: the hub's share tokens carry an opt-in `talk` flag on their
-scope. A `grid-view` token minted with it may call three named methods —
+How it travels: a card's token carries one `share-view` grant, and that grant
+has an opt-in `talk` flag. A `grid-view` token minted with it may call three
+named methods —
 `intercom.startTalkSession`, `intercom.pushTalkAudio`, `intercom.endTalkSession`
 — and only for the cameras the token already carries. The flag widens **what**
 may be called, never **which** cameras, and it is asked for at mint time so a
@@ -551,29 +552,55 @@ each entity's Home Assistant name.
 ### How the cards authenticate
 
 The integration holds the hub's OAuth credential and **never puts it in a
-browser**. Each card asks `POST /api/camstack/embed_token` for a hub SHARE
-token, scoped to a view kind (`grid-view` / `events-view`) and to the explicit
-device ids that card shows, valid for one hour and re-minted as it ages. The
-endpoint refuses any device this entry does not export as a camera, so a
-dashboard cannot become a general-purpose minting endpoint for the hub.
+browser**. Each card asks `POST /api/camstack/embed_token` for a hub token
+minted by `auth.mintToken` — the hub's one token format — whose only scope is a
+`share-view` grant for a view kind (`grid-view` / `events-view`) and the
+explicit device ids that card shows. The endpoint refuses any device this entry
+does not export as a camera, so a dashboard cannot become a general-purpose
+minting endpoint for the hub. An account link is allowed to mint exactly this
+grant and nothing wider.
 
-**And on the normal path that share token never reaches the browser either.**
+**One token per card scope, for as long as the dashboard exists.** A scope is
+(entry, kind, device ids in order, talk-back), and its token is:
+
+* **minted once**, for 90 days (the hub's maximum), labelled
+  `Home Assistant · grid · 4 cameras · #<digest>` — the digest is a stable key
+  for the scope, so the token shows up readable in the hub's token list;
+* **found again** after a Home Assistant restart: the secret is kept in Home
+  Assistant's storage (the hub shows it only once, at mint) and the row is
+  matched by its label through `auth.listTokens`, so a restart never mints a
+  duplicate. A row whose secret was lost is revoked and replaced, and a stored
+  token the hub no longer lists (revoked on the hub, or the entry now points at
+  another hub) is replaced;
+* **renewed in place** with `auth.extendToken` when a card asks for it with
+  less than 7 days left — same secret, same relay grant, nothing reloads;
+* **revoked** with `auth.revokeToken` when a card changes its device set (the
+  card names the set it held) and, for every scope, when the entry is removed.
+
+A hub that is briefly unreachable never takes a wall down: a stored token the
+hub would still accept keeps being served, and the check is retried on the
+next request. Revoking a token in the hub's UI is the kill switch: the next
+time a card asks, Home Assistant mints a new one.
+
+**And on the normal path that token never reaches the browser either.**
 A card without `url_base` frames the hub through Home Assistant's relay, which
-strips the browser's `Authorization` header and injects the share token itself,
+strips the browser's `Authorization` header and injects the token itself,
 server-side, on every forwarded request — HTTP and the WebSocket alike. A copy
 of the token in the page would authenticate nothing there and would only sit in
 the address bar, in browser history and in every screenshot of the dashboard,
 where anyone could copy it and use it against the hub from outside Home
-Assistant for the rest of its hour. So the mint answer carries only
-`proxy_base` (the grant — same-origin, revocable, dead when the token dies) and
-`expires_at`. A card configured with an explicit `url_base` has no relay in
-front of it, asks with `direct: true`, and is the one case that still gets the
-credential.
+Assistant. So the mint answer carries only `proxy_base` (the grant —
+same-origin, revocable, dead when the token dies) and `expires_at`. A card
+configured with an explicit `url_base` has no relay in front of it, asks with
+`direct: true`, and is the one case that still gets the credential.
 
-**Known gap — event thumbnails.** The hub's event-media plane accepts a session
-or scoped token and answers `401` to a share token, even for a device inside
-that token's own scope. Until that gate accepts a scoped share token, the events
-card lists its detections with text and badges and **without the pictures**.
+**Requires CamStack server 1.2.606 or later.** The old share-link routes
+(`auth.createShareToken` and the `csv_…` format) are gone from the hub; an
+older hub has no `auth.mintToken`, and the cards report its refusal verbatim.
+
+**Event thumbnails.** The hub's event-media plane used to answer `401` to the
+old share links. It accepts an `events-view` grant since the hub's one token
+format, and refuses any picture whose camera is outside the token's devices.
 
 ### YAML-mode dashboards
 
