@@ -1,10 +1,9 @@
-"""Mints the credential the Lovelace cards' iframes carry.
+"""Hands the Lovelace cards' iframes the credential they carry.
 
 The integration holds the hub's OAuth access token and **never** hands it to a
 browser: that credential is the whole account, it is refreshed on a timer, and
 a dashboard is not a place to keep one. What the cards get instead is a hub
-SHARE token (`csv_…`), minted per request through `auth.createShareToken` and
-scoped to
+token minted by `auth.mintToken` whose only scope is a view grant on
 
 * a view **kind** — `grid-view` or `events-view`, two disjoint perimeters on
   the hub's side (a grid token cannot read tracks, an events token cannot open
@@ -17,119 +16,59 @@ Two guards live here rather than on the hub:
   camera. Without that, any Home Assistant user could ask for a token against
   any device id the linked hub account can see, and the card would be a
   general-purpose minting endpoint for the whole hub.
-* the token is **cached per (entry, kind, device ids, talk)** until shortly
-  before it expires. A card re-renders whenever `hass` updates — several times
-  a second on a busy instance — and minting per render would write a row into
-  the hub's `share_view_tokens` table each time, forever. The cache is also
-  persisted with `helpers.storage.Store` so a Home Assistant restart does not
-  remint every card and flood the hub with duplicate share links.
+* one token per **scope** (entry, kind, device ids, talk), kept for 90 days,
+  renewed in place, found again after a restart and revoked when a card
+  replaces it — see `token_lifecycle.py`. A card re-renders whenever `hass`
+  updates, several times a second on a busy instance; none of that reaches
+  the hub.
 
 ## Where the token goes
 
 To the browser only when the card frames the hub DIRECTLY (`url_base` set on
 the card). The default path is the relay in `proxy.py`, which strips the
-incoming `Authorization` and injects the share token server-side on every
-forwarded request — HTTP and the WebSocket upgrade alike. A second copy of that
+incoming `Authorization` and injects the token server-side on every forwarded
+request — HTTP and the WebSocket upgrade alike. A second copy of that
 credential in the page authenticates nothing there and costs plenty: it used to
 sit in the events iframe's `#t=` fragment, i.e. in browser history and in every
 screenshot of the dashboard, and anyone who could read it could use it against
-the hub from outside Home Assistant for the rest of its TTL. What the browser
+the hub from outside Home Assistant for the rest of its life. What the browser
 gets instead is the grant id — same-origin, revocable, dead when the token
 dies.
-
-The tokens are deliberately short-lived (3 h) and EXTENDED in place near
-expiry so Identity does not fill with duplicate HA rows. `ttlSec: "never"`
-exists on the hub and is not used: a bearer that has left Home Assistant can
-only be taken back by expiring or by revocation.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 from aiohttp import web
 from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.storage import Store
-from homeassistant.util import dt as dt_util
 
 from .api import CamStackError
 from .const import (
     CONF_TALK_ENABLED,
     DEFAULT_TALK_ENABLED,
     DOMAIN,
-    EMBED_TOKEN_STORAGE_KEY,
-    EMBED_TOKEN_STORAGE_VERSION,
     EMBED_TOKEN_VIEW_URL,
-    SHARE_SCOPE_GRID,
-    SHARE_SCOPE_KINDS,
-    SHARE_SCOPE_MAX_DEVICES,
-    SHARE_TOKEN_EXTEND_MUTATION,
-    SHARE_TOKEN_MUTATION,
-    SHARE_TOKEN_RENEW_MARGIN,
-    SHARE_TOKEN_REVOKE_MUTATION,
-    SHARE_TOKEN_TTL,
+    VIEW_GRANT_GRID,
+    VIEW_GRANT_KINDS,
+    VIEW_GRANT_MAX_DEVICES,
 )
-from .proxy import async_forget_entry_grants, async_issue_grant, proxy_base_for
+from .proxy import (
+    async_forget_entry_grants,
+    async_forget_scope_grant,
+    async_issue_grant,
+    proxy_base_for,
+)
+from .token_lifecycle import MintedToken, TokenScope, async_get_keeper
 
 _LOGGER = logging.getLogger(__name__)
 
 _VIEW_REGISTERED = f"{DOMAIN}_embed_token_view_registered"
-_CACHE = f"{DOMAIN}_embed_token_cache"
-_STORE = f"{DOMAIN}_embed_token_store"
-_LOADED = f"{DOMAIN}_embed_token_loaded"
 
-
-@dataclass(frozen=True, slots=True)
-class MintedToken:
-    """One share token, and the moment it stops being usable."""
-
-    token: str
-    #: Epoch seconds, or None when the hub issued a token that never expires.
-    expires_at: float | None
-    #: Hub share-token row id — required to call `extendShareToken`.
-    id: str | None = None
-
-    def is_usable(self, now: float) -> bool:
-        """Return whether this token still has more than the margin left."""
-        if self.expires_at is None:
-            return True
-        return self.expires_at - now > SHARE_TOKEN_RENEW_MARGIN.total_seconds()
-
-    def is_still_valid_on_hub(self, now: float) -> bool:
-        """Return whether the hub would still accept this token (no margin)."""
-        if self.expires_at is None:
-            return True
-        return self.expires_at > now
-
-    def to_storage(self) -> dict[str, Any]:
-        """Serialize for the Store."""
-        payload: dict[str, Any] = {"token": self.token, "expires_at": self.expires_at}
-        if self.id is not None:
-            payload["id"] = self.id
-        return payload
-
-    @staticmethod
-    def from_storage(raw: Any) -> MintedToken | None:
-        """Read a MintedToken from a Store row, or None when unusable."""
-        if not isinstance(raw, dict):
-            return None
-        token = raw.get("token")
-        if not isinstance(token, str) or not token:
-            return None
-        expires_raw = raw.get("expires_at")
-        expires_at: float | None
-        if expires_raw is None:
-            expires_at = None
-        elif isinstance(expires_raw, int | float) and not isinstance(expires_raw, bool):
-            expires_at = float(expires_raw)
-        else:
-            return None
-        id_raw = raw.get("id")
-        token_id: str | None = id_raw if isinstance(id_raw, str) and id_raw else None
-        return MintedToken(token=token, expires_at=expires_at, id=token_id)
+#: `_parse_replaced`'s answer for a malformed `replaces`.
+_INVALID: Final = object()
 
 
 def async_register_embed_token_view(hass: HomeAssistant) -> None:
@@ -140,78 +79,23 @@ def async_register_embed_token_view(hass: HomeAssistant) -> None:
     hass.data[_VIEW_REGISTERED] = True
 
 
-def _memory(hass: HomeAssistant) -> dict[str, MintedToken]:
-    """Return the in-process mint cache, creating it on first use."""
-    return hass.data.setdefault(_CACHE, {})
+def async_forget_entry_tokens(hass: HomeAssistant, entry_id: str) -> None:
+    """Forget an UNLOADING entry's grants and verifications; keep its tokens.
+
+    The relay must not keep serving a credential of an entry that is gone, and
+    a reloaded entry — possibly now pointing at a different hub — must match
+    every stored token against its hub before serving it. The tokens
+    themselves survive: a reload is not a removal.
+    """
+    async_get_keeper(hass).async_forget_entry(entry_id)
+    async_forget_entry_grants(hass, entry_id)
 
 
-def _store(hass: HomeAssistant) -> Store[dict[str, Any]]:
-    """Return the persistent mint Store, creating it on first use."""
-    existing = hass.data.get(_STORE)
-    if existing is not None:
-        return existing
-    store: Store[dict[str, Any]] = Store(
-        hass, EMBED_TOKEN_STORAGE_VERSION, EMBED_TOKEN_STORAGE_KEY
-    )
-    hass.data[_STORE] = store
-    return store
-
-
-def _cache_key(
-    entry_id: str, kind: str, device_ids: tuple[int, ...], talk: bool
-) -> str:
-    """Stable Store / memory key for one mint scope."""
-    ids = ",".join(str(device_id) for device_id in device_ids)
-    return f"{entry_id}|{kind}|{ids}|{'1' if talk else '0'}"
-
-
-async def _async_ensure_loaded(hass: HomeAssistant) -> dict[str, MintedToken]:
-    """Load the Store into memory once per process, then return the memory map."""
-    cache = _memory(hass)
-    if hass.data.get(_LOADED):
-        return cache
-    stored = await _store(hass).async_load()
-    hass.data[_LOADED] = True
-    if not isinstance(stored, dict):
-        return cache
-    tokens = stored.get("tokens")
-    if not isinstance(tokens, dict):
-        return cache
-    now = dt_util.utcnow().timestamp()
-    for key, raw in tokens.items():
-        if not isinstance(key, str):
-            continue
-        minted = MintedToken.from_storage(raw)
-        # Keep tokens that are past the renew margin but still valid on the
-        # hub — `_async_answer` EXTENDS those instead of minting a new csv_*.
-        if minted is None or not minted.is_still_valid_on_hub(now):
-            continue
-        cache[key] = minted
-    _LOGGER.debug("Restored %d embed share token(s) from Store", len(cache))
-    return cache
-
-
-async def _async_persist(hass: HomeAssistant) -> None:
-    """Write the in-memory cache to the Store (hub-valid tokens only)."""
-    cache = _memory(hass)
-    now = dt_util.utcnow().timestamp()
-    payload = {
-        "tokens": {
-            key: minted.to_storage()
-            for key, minted in cache.items()
-            if minted.is_still_valid_on_hub(now)
-        }
-    }
-    await _store(hass).async_save(payload)
-
-
-async def async_forget_entry_tokens(hass: HomeAssistant, entry_id: str) -> None:
-    """Drop every token minted for an entry that is going away."""
-    cache = await _async_ensure_loaded(hass)
-    prefix = f"{entry_id}|"
-    for key in [key for key in cache if key.startswith(prefix)]:
-        del cache[key]
-    await _async_persist(hass)
+async def async_revoke_entry_tokens(
+    hass: HomeAssistant, entry_id: str, client: Any | None
+) -> None:
+    """Revoke every token of a REMOVED entry on its hub, and forget them."""
+    await async_get_keeper(hass).async_revoke_entry(client, entry_id)
     async_forget_entry_grants(hass, entry_id)
 
 
@@ -231,7 +115,7 @@ def parse_device_ids(raw: Any) -> list[int] | None:
             return None
         if entry not in seen:
             seen.append(entry)
-    if not seen or len(seen) > SHARE_SCOPE_MAX_DEVICES:
+    if not seen or len(seen) > VIEW_GRANT_MAX_DEVICES:
         return None
     return seen
 
@@ -253,7 +137,7 @@ def async_exported_camera_ids(hass: HomeAssistant, entry_id: str) -> set[int]:
 
 
 def async_talk_allowed(hass: HomeAssistant, entry_id: str) -> bool:
-    """Report whether THIS entry allows talk-back through a card's share token.
+    """Report whether THIS entry allows talk-back through a card's view token.
 
     The one authority (D62's rule applied to an integration-wide function: the
     switch stores nothing of its own, it reads the thing that already owns the
@@ -272,7 +156,7 @@ def async_talk_allowed(hass: HomeAssistant, entry_id: str) -> bool:
 
 
 class CamStackEmbedTokenView(HomeAssistantView):
-    """Hands a card a hub share token for the cameras it is configured with."""
+    """Hands a card a hub view token for the cameras it is configured with."""
 
     url = EMBED_TOKEN_VIEW_URL
     name = "api:camstack:embed_token"
@@ -283,7 +167,7 @@ class CamStackEmbedTokenView(HomeAssistantView):
     requires_auth = True
 
     async def post(self, request: web.Request) -> web.Response:
-        """Mint (or reuse) a share token for one entry, kind and device set."""
+        """Find, renew or mint the token for one entry, kind and device set."""
         hass: HomeAssistant = request.app[KEY_HASS]
         try:
             body = await request.json()
@@ -293,26 +177,26 @@ class CamStackEmbedTokenView(HomeAssistantView):
             return self.json_message("expected an object", 400)
 
         kind = body.get("kind")
-        if kind not in SHARE_SCOPE_KINDS:
+        if kind not in VIEW_GRANT_KINDS:
             return self.json_message(
-                f"kind must be one of {sorted(SHARE_SCOPE_KINDS)}", 400
+                f"kind must be one of {sorted(VIEW_GRANT_KINDS)}", 400
             )
 
         device_ids = parse_device_ids(body.get("device_ids"))
         if device_ids is None:
             return self.json_message(
                 "device_ids must be 1 to "
-                f"{SHARE_SCOPE_MAX_DEVICES} non-negative integers",
+                f"{VIEW_GRANT_MAX_DEVICES} non-negative integers",
                 400,
             )
 
         # Does this card frame the hub DIRECTLY, or through the relay?
         # The relayed path strips whatever `Authorization` the browser sends and
-        # injects the share token itself (see `proxy.py`), so the copy in the
+        # injects the view token itself (see `proxy.py`), so the copy in the
         # page authenticates nothing and only adds exposure: it used to ride the
         # events iframe's `#t=` fragment into browser history, readable in any
         # screenshot of the dashboard and usable against the hub from OUTSIDE
-        # Home Assistant for the rest of its hour. A card with an explicit
+        # Home Assistant for the rest of its life. A card with an explicit
         # `url_base` has no relay in front of it and still needs the credential,
         # so it asks for it here — the only case that gets one.
         direct = body.get("direct")
@@ -358,128 +242,74 @@ class CamStackEmbedTokenView(HomeAssistantView):
         # rather than relying on the hub to ignore it.
         granted = (
             talk is True
-            and kind == SHARE_SCOPE_GRID
+            and kind == VIEW_GRANT_GRID
             and async_talk_allowed(hass, entry_id)
         )
+        scope = TokenScope(entry_id, kind, tuple(device_ids), granted)
+
+        # The scope this card held before its device set (or talk-back) changed.
+        # Revoked AFTER the new token exists, so a failed mint never leaves the
+        # card with nothing; a card sharing the old scope sees its grant go
+        # stale and asks again.
+        replaced = _parse_replaced(body.get("replaces"), entry_id, kind)
+        if replaced is _INVALID:
+            return self.json_message(
+                "replaces must be an object with device_ids and an optional talk",
+                400,
+            )
         return await self._async_answer(
-            hass, entry_id, kind, device_ids, direct is True, granted
+            hass, scope, direct is True, None if replaced == scope else replaced
         )
 
     async def _async_answer(
         self,
         hass: HomeAssistant,
-        entry_id: str,
-        kind: str,
-        device_ids: list[int],
+        scope: TokenScope,
         direct: bool,
-        talk: bool,
+        replaced: TokenScope | None,
     ) -> web.Response:
-        """Return a cached token, or mint one and cache it (memory + Store)."""
-        cache = await _async_ensure_loaded(hass)
-        # `talk` is part of the KEY, not a detail of the answer: two tokens for
-        # the same cameras are different credentials when one of them can speak
-        # into the house. Without it the first mint of a scope would be handed
-        # back to every later request for it — a card that never asked for
-        # talk-back would be given a talking token, and a card that did would be
-        # given a silent one and look broken.
-        key = _cache_key(entry_id, kind, tuple(device_ids), talk)
-        now = dt_util.utcnow().timestamp()
-        cached = cache.get(key)
-        if cached is not None and cached.is_usable(now):
-            return self.json(
-                _answer(hass, entry_id, kind, tuple(device_ids), talk, cached, direct)
-            )
-
-        entry = hass.config_entries.async_get_entry(entry_id)
+        """Return the scope's token (found, renewed or minted), then retire the old."""
+        entry = hass.config_entries.async_get_entry(scope.entry_id)
         client = getattr(getattr(entry, "runtime_data", None), "client", None)
         if client is None:
             return self.json_message("the CamStack entry is not loaded", 503)
 
-        ttl_sec = int(SHARE_TOKEN_TTL.total_seconds())
-        # Near expiry (or already past the margin): prefer EXTEND so Identity
-        # does not accumulate a new share-link row every few hours. Only mint
-        # a replacement when the hub says the row is gone or expired.
-        if (
-            cached is not None
-            and cached.id is not None
-            and cached.is_still_valid_on_hub(now)
-        ):
-            try:
-                extended = await client.mutate(
-                    SHARE_TOKEN_EXTEND_MUTATION,
-                    {"id": cached.id, "ttlSec": ttl_sec},
-                )
-            except CamStackError as err:
-                _LOGGER.info(
-                    "CamStack refused to extend embed token %s — will replace: %s",
-                    cached.id,
-                    err,
-                )
-            else:
-                renewed = _read_extended(cached, extended)
-                if renewed is not None:
-                    cache[key] = renewed
-                    await _async_persist(hass)
-                    return self.json(
-                        _answer(
-                            hass,
-                            entry_id,
-                            kind,
-                            tuple(device_ids),
-                            talk,
-                            renewed,
-                            direct,
-                        )
-                    )
-
-        payload = {
-            "scope": {
-                "kind": kind,
-                "deviceIds": device_ids,
-                # OMITTED when off, never sent as `false`: the hub's
-                # `ShareTokenScopeSchema` says absent means off, and a payload
-                # that changed shape for every caller would make an older hub's
-                # answer impossible to reason about. The flag widens WHAT may be
-                # called, never WHICH cameras — `deviceIds` still gates it.
-                **({"talk": True} if talk else {}),
-            },
-            "ttlSec": ttl_sec,
-        }
+        keeper = async_get_keeper(hass)
         try:
-            result = await client.mutate(SHARE_TOKEN_MUTATION, payload)
+            minted = await keeper.async_token_for(client, scope)
         except CamStackError as err:
             # The hub's own sentence, verbatim. "Could not mint a token" tells
-            # an operator nothing; "no scope grants view on …" tells them
-            # everything.
+            # an operator nothing; "a share-view grant names a device you cannot
+            # view" tells them everything.
             _LOGGER.warning("CamStack refused to mint an embed token: %s", err)
             return self.json_message(str(err), 502)
 
-        minted = _read_minted(result)
-        if minted is None:
-            return self.json_message("the hub returned no share token", 502)
-        old_id = cached.id if cached is not None else None
-        if old_id is not None and old_id != minted.id:
-            try:
-                await client.mutate(SHARE_TOKEN_REVOKE_MUTATION, {"id": old_id})
-            except CamStackError as err:
-                _LOGGER.debug(
-                    "Could not revoke replaced embed token %s: %s", old_id, err
-                )
-        cache[key] = minted
-        await _async_persist(hass)
-        return self.json(
-            _answer(hass, entry_id, kind, tuple(device_ids), talk, minted, direct)
-        )
+        if replaced is not None and await keeper.async_revoke_scope(client, replaced):
+            async_forget_scope_grant(hass, replaced.grant_key)
+        return self.json(_answer(hass, scope, minted, direct))
+
+
+def _parse_replaced(raw: Any, entry_id: str, kind: str) -> TokenScope | object | None:
+    """Read the card's previous scope, or None when it sent none.
+
+    Same entry and same kind as the request: a card never changes either. The
+    talk flag is what the card was GRANTED, so it is taken as sent — the option
+    may have changed since, and the old token is what is being named.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        return _INVALID
+    device_ids = parse_device_ids(raw.get("device_ids"))
+    talk = raw.get("talk")
+    if device_ids is None or (talk is not None and not isinstance(talk, bool)):
+        return _INVALID
+    granted = talk is True and kind == VIEW_GRANT_GRID
+    return TokenScope(entry_id, kind, tuple(device_ids), granted)
 
 
 def _answer(
-    hass: HomeAssistant,
-    entry_id: str,
-    kind: str,
-    device_ids: tuple[int, ...],
-    talk: bool,
-    minted: MintedToken,
-    direct: bool,
+    hass: HomeAssistant, scope: TokenScope, minted: MintedToken, direct: bool
 ) -> dict[str, Any]:
     """Return the same-origin relay path, and the token only if it is needed.
 
@@ -493,13 +323,8 @@ def _answer(
     reported on both paths regardless — it is not a secret, and the card needs
     it to know when to come back for a fresh grant.
     """
-    # The talk flag is in the GRANT's key too, for the same reason it is in the
-    # cache's: the grant id is what the browser carries, and two scopes that
-    # differ only by talk-back sharing one id would mean the relay injecting
-    # whichever of the two tokens was issued last.
-    scope_key = (entry_id, kind, *map(str, device_ids), "talk" if talk else "no-talk")
     grant_id = async_issue_grant(
-        hass, entry_id, scope_key, minted.token, minted.expires_at
+        hass, scope.entry_id, scope.grant_key, minted.token, minted.expires_at
     )
     return {
         **({"token": minted.token} if direct else {}),
@@ -509,39 +334,5 @@ def _answer(
         # refused must be able to say WHY — "the integration has talk-back off"
         # is an answer an operator can act on; a talk button that fails at the
         # hub is not.
-        "talk": talk,
+        "talk": scope.talk,
     }
-
-
-def _read_minted(result: Any) -> MintedToken | None:
-    """Read `{ id, token, expiresAt }` off the hub's create answer."""
-    if not isinstance(result, dict):
-        return None
-    token = result.get("token")
-    if not isinstance(token, str) or not token:
-        return None
-    id_raw = result.get("id")
-    token_id: str | None = id_raw if isinstance(id_raw, str) and id_raw else None
-    raw_expiry = result.get("expiresAt")
-    expires_at: float | None = None
-    if isinstance(raw_expiry, int | float) and not isinstance(raw_expiry, bool):
-        # The hub reports epoch MILLISECONDS. A value read as seconds would sit
-        # 55 000 years in the future and the token would never be re-minted.
-        expires_at = float(raw_expiry) / 1000.0
-    return MintedToken(token=token, expires_at=expires_at, id=token_id)
-
-
-def _read_extended(previous: MintedToken, result: Any) -> MintedToken | None:
-    """Apply `{ id, expiresAt }` from extend onto the cached credential."""
-    if not isinstance(result, dict):
-        return None
-    raw_expiry = result.get("expiresAt")
-    if not isinstance(raw_expiry, int | float) or isinstance(raw_expiry, bool):
-        return None
-    id_raw = result.get("id")
-    token_id = id_raw if isinstance(id_raw, str) and id_raw else previous.id
-    return MintedToken(
-        token=previous.token,
-        expires_at=float(raw_expiry) / 1000.0,
-        id=token_id,
-    )

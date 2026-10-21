@@ -14,6 +14,7 @@ serving the panel it was serving while Home Assistant asks for the rest.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from homeassistant.const import (
@@ -42,7 +43,7 @@ from .coordinator import (
     CamStackCoordinator,
     CamStackRuntimeData,
 )
-from .embed_token import async_forget_entry_tokens
+from .embed_token import async_forget_entry_tokens, async_revoke_entry_tokens
 from .frontend import async_remove_panel, async_setup_frontend
 from .migration import async_migrate_entry, entry_has_credentials, entry_is_oauth
 from .oauth import CamStackOAuth2Implementation, OAuth2Auth
@@ -52,6 +53,8 @@ from .push_view import async_register_push_view, async_unregister_push_hub
 from .version_view import async_register_version_view
 
 __all__ = ["async_migrate_entry"]
+
+_LOGGER = logging.getLogger(__name__)
 
 # Every platform this integration builds — and the answer the hub reads at
 # `/api/camstack/version` to decide what to send. Adding one here is what
@@ -94,15 +97,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: CamStackConfigEntry) -> 
     if not entry_has_credentials(entry.data):
         raise ConfigEntryAuthFailed("credentials_required")
 
-    verify_ssl = entry.data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
-    session = async_create_clientsession(hass, verify_ssl=verify_ssl)
-    client = CamStackClient(
-        session,
-        entry.data[CONF_HOST],
-        entry.data[CONF_PORT],
-        _build_auth(hass, entry, session, verify_ssl=verify_ssl),
-        verify_ssl=verify_ssl,
-    )
+    client = _build_client(hass, entry)
 
     push = CamStackPushHub(hass, entry, client)
     # The structure and the last values the hub pushed, from disk. Without
@@ -146,10 +141,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: CamStackConfigEntry) ->
     """Unload a config entry."""
     async_remove_panel(hass, entry.entry_id)
     async_unregister_push_hub(hass, entry.entry_id)
-    # The cached share tokens are minted against THIS entry's hub credential.
-    # Keeping them past an unload would hand a reloaded entry — possibly now
-    # pointing at a different hub — a credential for the old one.
-    await async_forget_entry_tokens(hass, entry.entry_id)
+    # The cards' tokens are minted against THIS entry's hub credential. Their
+    # grants go with the entry; their secrets stay, and a reloaded entry —
+    # possibly now pointing at a different hub — matches each against its hub
+    # before serving it. Revocation is for a REMOVAL (`async_remove_entry`).
+    async_forget_entry_tokens(hass, entry.entry_id)
     runtime = getattr(entry, "runtime_data", None)
     if isinstance(runtime, CamStackRuntimeData):
         runtime.push.async_stop()
@@ -209,8 +205,34 @@ async def async_remove_entry(hass: HomeAssistant, entry: CamStackConfigEntry) ->
     Home Assistant only calls `async_unload_entry` for an entry that actually
     loaded. An entry that never got past the credential check still put a panel
     in the sidebar, and deleting it must remove that panel too.
+
+    The cards' hub tokens are revoked here too, best effort: a removal must
+    never fail because the hub is unreachable, and a row left behind expires
+    on its own within 90 days.
     """
     async_remove_panel(hass, entry.entry_id)
+    try:
+        has_credentials = entry_has_credentials(entry.data)
+        client = _build_client(hass, entry) if has_credentials else None
+        await async_revoke_entry_tokens(hass, entry.entry_id, client)
+    except Exception:  # A removal never fails here — see above.
+        _LOGGER.warning(
+            "Could not revoke the CamStack card tokens of a removed entry",
+            exc_info=True,
+        )
+
+
+def _build_client(hass: HomeAssistant, entry: CamStackConfigEntry) -> CamStackClient:
+    """Return a hub client for THIS entry's address and credential."""
+    verify_ssl = entry.data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
+    session = async_create_clientsession(hass, verify_ssl=verify_ssl)
+    return CamStackClient(
+        session,
+        entry.data[CONF_HOST],
+        entry.data[CONF_PORT],
+        _build_auth(hass, entry, session, verify_ssl=verify_ssl),
+        verify_ssl=verify_ssl,
+    )
 
 
 def _build_auth(

@@ -40,7 +40,7 @@ CONF_PANEL_TITLE: Final = "panel_title"
 CONF_PANEL_ICON: Final = "panel_icon"
 CONF_PANEL_URL: Final = "panel_url"
 
-# Talk-back (intercom) through a card's share token.
+# Talk-back (intercom) through a card's view token.
 #
 # THE AUTHORITY, and deliberately not a card option. A Lovelace card's config is
 # editable by anyone who can edit a dashboard, and the mint endpoint is open to
@@ -87,7 +87,7 @@ CONFIG_VIEW_URL: Final = "/api/camstack/config"
 VIEWER_EMBED_PATH: Final = "/viewer/camstack/embed/index.html"
 
 # Where a card asks for the credential its iframe needs. The integration holds
-# the hub's OAuth token and never hands it to a browser: it mints a SHARE token
+# the hub's OAuth token and never hands it to a browser: it mints a VIEW token
 # instead, scoped to a view kind and to an explicit list of device ids.
 EMBED_TOKEN_VIEW_URL: Final = "/api/camstack/embed_token"
 # The same-origin door to the hub for the cards' iframes: HTTP and WebSocket
@@ -96,7 +96,7 @@ EMBED_TOKEN_VIEW_URL: Final = "/api/camstack/embed_token"
 PROXY_VIEW_URL: Final = "/api/camstack/p"
 # What a grant may reach on the hub, and nothing else: the embed page and its
 # assets, tRPC (HTTP and WebSocket), and the two media routes the embed draws
-# from. A share token cannot do more on the hub anyway; this keeps Home
+# from. A view token cannot do more on the hub anyway; this keeps Home
 # Assistant from being a relay to routes a future token might unlock.
 PROXY_ALLOWED_PREFIXES: Final = (
     "viewer/",
@@ -125,30 +125,39 @@ MOUNT_PROBE_READ_BYTES: Final = 16_384
 # not fail on a token that was valid when the page composed it.
 PROXY_GRANT_GRACE: Final = timedelta(minutes=1)
 
-# The hub's minting / extend mutations, and the two scope kinds it accepts.
-# `auth.createShareToken` -> `{ id, token, expiresAt }`.
-# `auth.extendShareToken` -> `{ id, expiresAt }` (same `csv_*`, slid expiry).
-SHARE_TOKEN_MUTATION: Final = "auth.createShareToken"
-SHARE_TOKEN_EXTEND_MUTATION: Final = "auth.extendShareToken"
-SHARE_TOKEN_REVOKE_MUTATION: Final = "auth.revokeShareToken"
-SHARE_SCOPE_GRID: Final = "grid-view"
-SHARE_SCOPE_EVENTS: Final = "events-view"
-SHARE_SCOPE_KINDS: Final = frozenset({SHARE_SCOPE_GRID, SHARE_SCOPE_EVENTS})
+# The hub's ONE token surface (D892, D895): every credential is minted by
+# `auth.mintToken` and its permissions are its `scopes`. A card's token carries
+# exactly one scope, a `share-view` grant, which an account link (this
+# integration's OAuth token) is allowed to mint, list, extend and revoke.
+#   auth.mintToken   {scopes, expiresIn, label} -> {token, record: {id, expiresAt…}}
+#   auth.listTokens  {label}                    -> [{id, label, expiresAt, revokedAt…}]
+#   auth.extendToken {id, expiresIn}            -> {id, expiresAt…} (same secret)
+#   auth.revokeToken {id}                       -> {success}
+TOKEN_MINT_MUTATION: Final = "auth.mintToken"
+TOKEN_LIST_QUERY: Final = "auth.listTokens"
+TOKEN_EXTEND_MUTATION: Final = "auth.extendToken"
+TOKEN_REVOKE_MUTATION: Final = "auth.revokeToken"
+VIEW_GRANT_SCOPE_TYPE: Final = "share-view"
+VIEW_GRANT_GRID: Final = "grid-view"
+VIEW_GRANT_EVENTS: Final = "events-view"
+VIEW_GRANT_KINDS: Final = frozenset({VIEW_GRANT_GRID, VIEW_GRANT_EVENTS})
 
-# The hub caps a share scope at 64 device ids (`deviceIds` max in
-# `auth.router.ts`). Refusing here names the limit; letting the hub refuse
+# The hub caps a view grant at 64 device ids (`SHARE_VIEW_MAX_DEVICES` in
+# `credential-scope.ts`). Refusing here names the limit; letting the hub refuse
 # would surface as an opaque BAD_REQUEST on a dashboard.
-SHARE_SCOPE_MAX_DEVICES: Final = 64
+VIEW_GRANT_MAX_DEVICES: Final = 64
 
-# A share token is a BEARER credential that can leave Home Assistant on the
-# direct path. On the default relay path it stays inside HA, but Identity's
-# share-link list still grows if we mint forever — so we use a 3 h TTL and
-# EXTEND the same row near expiry instead of creating a new `csv_*` each time.
-# Never `ttlSec: "never"` from this integration.
-SHARE_TOKEN_TTL: Final = timedelta(hours=3)
-# Extend (or replace) this long before expiry, so a card that has been open
-# all along does not hand its iframe a credential that dies mid-stream.
-SHARE_TOKEN_RENEW_MARGIN: Final = timedelta(minutes=5)
+# A card's token lives as long as the hub allows for any token (90 days,
+# `TOKEN_MAX_LIFETIME_SEC`) and is EXTENDED in place when a card asks for it
+# with less than a week left, so one dashboard is one row on the hub for as
+# long as it exists. The hub would accept `"never"` for a lone view grant; this
+# integration does not ask for it — a token that never expires can only be
+# taken back by revocation, and a renewing one costs nothing.
+EMBED_TOKEN_LIFETIME: Final = timedelta(days=90)
+EMBED_TOKEN_RENEW_BEFORE: Final = timedelta(days=7)
+# The hub's label bound (`label` max in `MintTokenInputSchema`).
+EMBED_TOKEN_LABEL_MAX: Final = 80
+EMBED_TOKEN_LABEL_PREFIX: Final = "Home Assistant"
 
 MANUFACTURER: Final = "CamStack"
 
@@ -238,8 +247,8 @@ STORAGE_KEY: Final = "camstack.push"
 STORAGE_VERSION: Final = 1
 STORAGE_SAVE_DELAY: Final = 30
 
-# Minted embed share tokens (`csv_…`) — process cache alone reminted on every
-# Home Assistant restart and flooded `share_view_tokens` on the hub.
+# The secrets of the cards' minted tokens. The hub returns a secret only at
+# mint, so without this every restart would have to revoke and re-mint them.
 EMBED_TOKEN_STORAGE_KEY: Final = "camstack.embed_tokens"
 EMBED_TOKEN_STORAGE_VERSION: Final = 1
 

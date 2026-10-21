@@ -1,7 +1,7 @@
 """The same-origin relay the cards' iframes go through.
 
 A fake hub (plain aiohttp) stands in for CamStack: the tests assert what
-reaches it — path, query, the injected share token, no Home Assistant cookie —
+reaches it — path, query, the injected view token, no Home Assistant cookie —
 and what the browser gets back, over HTTP and over a WebSocket.
 """
 
@@ -37,7 +37,11 @@ EXPORTED = 615
 
 
 def minted(expires_at_ms: int | None = 4_000_000_000_000) -> dict[str, object]:
-    return {"id": "tok1", "token": "csv_deadbeef", "expiresAt": expires_at_ms}
+    """Return a hub `auth.mintToken` answer."""
+    return {
+        "token": "jwt-deadbeef",
+        "record": {"id": "tok1", "label": "x", "expiresAt": expires_at_ms},
+    }
 
 
 class FakeHub:
@@ -138,7 +142,7 @@ def _grant_for(
     hass: HomeAssistant, entry_id: str, expires_at: float | None = None
 ) -> str:
     return async_issue_grant(
-        hass, entry_id, (entry_id, "grid-view", "615"), "csv_x", expires_at
+        hass, entry_id, (entry_id, "grid-view", "615"), "jwt-x", expires_at
     )
 
 
@@ -168,7 +172,7 @@ async def test_the_relay_forwards_the_embed_page_with_the_grant_token_and_no_ha_
         {
             "path": "/viewer/camstack/embed/index.html",
             "query": {"mode": "grid"},
-            "authorization": "Bearer csv_x",
+            "authorization": "Bearer jwt-x",
             "prefix": f"{PROXY_VIEW_URL}/{grant}",
             "accept_encoding": "gzip, deflate",
             "cookie": None,
@@ -195,7 +199,7 @@ async def test_a_trpc_post_is_relayed_with_its_body(
     )
 
     assert response.status == 200
-    assert await response.json() == {"got": '{"json":null}', "auth": "Bearer csv_x"}
+    assert await response.json() == {"got": '{"json":null}', "auth": "Bearer jwt-x"}
 
 
 async def test_a_websocket_is_relayed_both_ways(
@@ -215,7 +219,7 @@ async def test_a_websocket_is_relayed_both_ways(
         msg = await ws.receive(timeout=5)
 
     assert msg.type == aiohttp.WSMsgType.TEXT
-    assert msg.data == "echo:hello:Bearer csv_x"
+    assert msg.data == "echo:hello:Bearer jwt-x"
 
 
 async def test_an_unknown_and_an_expired_grant_look_the_same(
@@ -283,25 +287,25 @@ async def test_a_grant_is_stable_per_scope_and_forgotten_with_its_entry(
 
     The URL is the grant; only the token behind it changes.
     """
-    first = async_issue_grant(hass, "e1", ("e1", "grid-view", "615"), "csv_a", None)
-    second = async_issue_grant(hass, "e1", ("e1", "grid-view", "615"), "csv_b", None)
-    other = async_issue_grant(hass, "e1", ("e1", "events-view", "615"), "csv_c", None)
+    first = async_issue_grant(hass, "e1", ("e1", "grid-view", "615"), "jwt-a", None)
+    second = async_issue_grant(hass, "e1", ("e1", "grid-view", "615"), "jwt-b", None)
+    other = async_issue_grant(hass, "e1", ("e1", "events-view", "615"), "jwt-c", None)
 
     assert first == second
     assert other != first
     async_forget_entry_grants(hass, "e1")
     assert (
-        async_issue_grant(hass, "e1", ("e1", "grid-view", "615"), "csv_d", None)
+        async_issue_grant(hass, "e1", ("e1", "grid-view", "615"), "jwt-d", None)
         != first
     )
 
 
 def test_a_grant_outlives_its_token_by_the_grace_only() -> None:
-    grant = ProxyGrant("e1", "csv_x", expires_at=1000.0)
+    grant = ProxyGrant("e1", "jwt-x", expires_at=1000.0)
     grace = PROXY_GRANT_GRACE.total_seconds()
     assert grant.is_live(1000.0 + grace)
     assert not grant.is_live(1000.0 + grace + 1)
-    assert ProxyGrant("e1", "csv_x", expires_at=None).is_live(1e12)
+    assert ProxyGrant("e1", "jwt-x", expires_at=None).is_live(1e12)
 
 
 async def test_the_mint_answer_carries_the_relay_path_bound_to_the_token(
@@ -335,7 +339,7 @@ async def test_the_mint_answer_carries_the_relay_path_bound_to_the_token(
         f"{payload['proxy_base']}/viewer/camstack/embed/index.html"
     )
     assert relayed.status == 200
-    assert hub.requests[-1]["authorization"] == "Bearer csv_deadbeef"
+    assert hub.requests[-1]["authorization"] == "Bearer jwt-deadbeef"
 
 
 async def test_the_panels_grant_relays_every_route_and_injects_nothing(
@@ -370,7 +374,7 @@ async def test_the_relay_injects_the_token_the_browser_never_received(
 
     Mint the way a card does now — no `direct`, so the answer carries no token
     — and then drive the two transports the embed actually uses through the
-    grant. Both reach the hub bearing the share token, injected server-side.
+    grant. Both reach the hub bearing the view token, injected server-side.
     """
     await _setup(hass, config_entry)
     mock_client.mutate.reset_mock()
@@ -393,7 +397,7 @@ async def test_the_relay_injects_the_token_the_browser_never_received(
     )
     assert await posted.json() == {
         "got": '{"json":null}',
-        "auth": "Bearer csv_deadbeef",
+        "auth": "Bearer jwt-deadbeef",
     }
 
     # WebSocket: the tRPC live link. The SDK's `connectionParams` carry no token
@@ -402,7 +406,7 @@ async def test_the_relay_injects_the_token_the_browser_never_received(
     async with browser.ws_connect(f"{base}/trpc") as ws:
         await ws.send_str("hello")
         msg = await ws.receive(timeout=5)
-    assert msg.data == "echo:hello:Bearer csv_deadbeef"
+    assert msg.data == "echo:hello:Bearer jwt-deadbeef"
 
 
 async def test_the_relay_never_asks_the_hub_for_an_encoding_it_cannot_decode(
@@ -475,7 +479,7 @@ async def test_the_panel_grant_sends_the_hub_session_cookie_back_up(
     A panel grant injects no bearer (`ProxyGrant.token` is None): the admin UI
     signs in through the relay and the hub's own `camstack_session` is what
     authorises every request afterwards. The relay dropped `Cookie` on the way
-    up for every grant — right for an embed, which carries a share token — so
+    up for every grant — right for an embed, which carries a view token — so
     the panel authenticated nothing. Everything unauthenticated loaded (the
     bundle, the brand mark, the icons) and every snapshot came back 401, which
     is exactly what the operator reported on 2026-09-08.
@@ -503,7 +507,7 @@ async def test_an_embed_grant_still_sends_no_cookie_at_all(
     hub: FakeHub,
     hass_client_no_auth: ClientSessionGenerator,
 ) -> None:
-    """An embed carries a share token; its cookies are Home Assistant's alone."""
+    """An embed carries a view token; its cookies are Home Assistant's alone."""
     await _setup(hass, config_entry)
     grant = _grant_for(hass, config_entry.entry_id)
     client = await hass_client_no_auth()

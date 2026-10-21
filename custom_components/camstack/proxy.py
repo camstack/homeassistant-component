@@ -12,8 +12,8 @@ WebSocket, to the hub itself. This module is that relay for CamStack.
 
 `/api/camstack/p/{grant}/{path}` is `requires_auth = False` because an iframe
 cannot send Home Assistant's auth header. What guards it is `{grant}`: an
-unguessable id the embed-token endpoint hands out TOGETHER with a share token,
-to an authenticated Home Assistant user only. The relay injects that share
+unguessable id the embed-token endpoint hands out TOGETHER with a view token,
+to an authenticated Home Assistant user only. The relay injects that view
 token — device-scoped, one hour — into every forwarded request. The grant
 dies with the token (plus a short grace) and knows only what the token knows;
 the integration's own hub credential never travels this path. Scrypted's relay
@@ -123,7 +123,7 @@ _RESPONSE_HEADERS_DROPPED = frozenset(
 )
 
 
-# A grant for a card's embed: the embed's own routes, the share token injected.
+# A grant for a card's embed: the embed's own routes, the view token injected.
 GRANT_EMBED = "embed"
 # A grant for the sidebar panel: every route, nothing injected — the admin UI
 # signs in on its own.
@@ -135,7 +135,7 @@ class ProxyGrant:
     """What one grant id stands for: an entry, and the token relayed under it."""
 
     entry_id: str
-    #: The share token injected on every relayed request; None for the panel.
+    #: The view token injected on every relayed request; None for the panel.
     token: str | None
     #: Epoch seconds, or None for a grant that never expires.
     expires_at: float | None
@@ -203,6 +203,18 @@ def async_forget_entry_grants(hass: HomeAssistant, entry_id: str) -> None:
     ids = _grant_ids(hass)
     for key in [key for key, grant_id in ids.items() if grant_id in gone]:
         del ids[key]
+
+
+@callback
+def async_forget_scope_grant(hass: HomeAssistant, scope_key: tuple[str, ...]) -> None:
+    """Drop the grant of one scope whose token was revoked.
+
+    A page still framing it gets a 404 from the relay, which the cards read as
+    a stale grant and answer by asking for a fresh token.
+    """
+    grant_id = _grant_ids(hass).pop(scope_key, None)
+    if grant_id is not None:
+        _grants(hass).pop(grant_id, None)
 
 
 @callback
@@ -312,7 +324,7 @@ def _forward_headers(
     `async_issue_panel_grant` injects no bearer, so the admin UI signs in
     through the relay and the hub's own `camstack_session` authorises every
     request after that. `Cookie` is dropped for every grant by default — right
-    for an embed, which carries a share token — and dropping it for the panel
+    for an embed, which carries a view token — and dropping it for the panel
     too meant everything unauthenticated loaded while every snapshot came back
     401 (operator report, 2026-09-08).
     """
@@ -359,7 +371,7 @@ def _response_headers(
     """Return the headers the browser gets back.
 
     `cookie_path` is the grant's own prefix for a panel grant, and `None` for an
-    embed grant, which injects a share token and has no session to carry. A
+    embed grant, which injects a view token and has no session to carry. A
     response may carry several `Set-Cookie` lines, so this walks the multidict
     rather than collapsing it into a plain dict.
     """

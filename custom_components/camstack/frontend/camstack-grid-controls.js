@@ -132,7 +132,7 @@ export const QUALITY_BADGE = { auto: "A", high: "H", mid: "M", low: "L" };
 /**
  * What the talk control says, per state — and why there are FOUR of them.
  *
- * Talk-back rides on the share token: the hub's `ShareTokenScopeSchema` carries
+ * Talk-back rides on the view token: the hub's `ShareViewGrantSchema` carries
  * an opt-in `talk` flag, and a `grid-view` token minted with it may call three
  * named methods (`intercom.startTalkSession` / `pushTalkAudio` /
  * `endTalkSession`) — and only for the deviceIds the token already carries. The

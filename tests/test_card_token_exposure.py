@@ -1,4 +1,4 @@
-"""The share token must not reach the browser on the relayed path.
+"""The view token must not reach the browser on the relayed path.
 
 This is a GREP, not a behaviour test, and deliberately so: the two cards are
 plain ES modules loaded by Lovelace, there is no harness here that runs them,
@@ -10,7 +10,7 @@ screenshot of the dashboard, where anyone could copy it and use it against the
 hub from outside Home Assistant for the rest of its hour.
 
 On the relayed path that copy authenticates nothing: `proxy.py` strips the
-browser's `Authorization` and injects the share token server-side on every
+browser's `Authorization` and injects the view token server-side on every
 forwarded request. So the rule the cards must keep is simple — a token may
 leave this page only under an explicit `_isDirect()` branch, i.e. only when the
 card was configured with `url_base` and frames the hub with no relay in front
@@ -69,7 +69,7 @@ def test_a_url_fragment_carries_a_token_only_on_the_direct_path(card: str) -> No
         if "#t=" not in line:
             continue
         assert "_isDirect()" in line, (
-            f"{card}:{number} puts a share token in the frame URL without an "
+            f"{card}:{number} puts a view token in the frame URL without an "
             f"`_isDirect()` gate — on the relayed path Home Assistant already "
             f"injects it server-side:\n  {line.strip()}"
         )
@@ -84,7 +84,7 @@ def test_the_embed_config_carries_a_token_only_on_the_direct_path() -> None:
         if "token" not in line or line.strip().startswith(("*", "//")):
             continue
         assert "grant.token ?" in line or "_isDirect()" in line, (
-            "the grid card posts a share token into the embed unconditionally; "
+            "the grid card posts a view token into the embed unconditionally; "
             "on the relayed path the browser must hold no credential:\n  "
             + line.strip()
         )

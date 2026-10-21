@@ -38,6 +38,7 @@ ASSET_DIR = COMPONENT_DIR / "frontend"
 GRID_CARD = ASSET_DIR / "camstack-grid-card.js"
 GRID_CONTROLS = ASSET_DIR / "camstack-grid-controls.js"
 EMBED_TOKEN = COMPONENT_DIR / "embed_token.py"
+TOKEN_LIFECYCLE = COMPONENT_DIR / "token_lifecycle.py"
 
 # The viewer's APP source (`src/`), not its embed bundle — the bar, the trigger
 # rows and the responsive rules all live there. Same override and the same
@@ -339,7 +340,7 @@ def test_only_the_entry_option_grants_talk_back() -> None:
 
     # Absent, never `false`: the hub's schema says absent means off, and a
     # payload that changed shape for every caller would break the compat story.
-    assert '**({"talk": True} if talk else {})' in mint, (
+    assert '**({"talk": True} if self.talk else {})' in _read(TOKEN_LIFECYCLE), (
         "the scope sends `talk` unconditionally"
     )
 
@@ -354,10 +355,14 @@ def test_a_talking_token_is_not_interchangeable_with_a_silent_one() -> None:
     request for it, in both directions.
     """
     mint = _read(EMBED_TOKEN)
-    assert "key = _cache_key(entry_id, kind, tuple(device_ids), talk)" in mint, (
+    lifecycle = _read(TOKEN_LIFECYCLE)
+    assert "TokenScope(entry_id, kind, tuple(device_ids), granted)" in mint, (
         "the token cache cannot tell a talking token from a silent one"
     )
-    assert '"talk" if talk else "no-talk"' in mint, (
+    assert "{'1' if self.talk else '0'}" in lifecycle, (
+        "the token cache cannot tell a talking token from a silent one"
+    )
+    assert '"talk" if self.talk else "no-talk"' in lifecycle, (
         "the same-origin grant cannot tell them apart, so the relay would "
         "inject whichever token was issued last"
     )

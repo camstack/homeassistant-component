@@ -316,6 +316,10 @@ def make_query_responder(
             return DEVICE_LIST
         if path == "auth.me":
             return ME
+        if path == "auth.listTokens":
+            # A hub on which this Home Assistant has minted nothing yet.
+            # `tests/test_embed_token.py` replaces this with a stateful hub.
+            return []
         if path == "snapshot.getSnapshot":
             return {"base64": "/9j/4AAQ", "contentType": "image/jpeg"}
         raise AssertionError(f"unexpected query: {path}")

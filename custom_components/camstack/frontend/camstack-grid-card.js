@@ -460,6 +460,10 @@ class CamstackGridCard extends HTMLElement {
     this._proxyBase = null;
     this._tokenExpiresAt = 0;
     this._tokenKey = null;
+    /** The scope this card last HELD a token for. Survives `_forgetGrant` (a
+     *  stale grant is the same scope), so a changed device set can name the
+     *  token it replaces and Home Assistant revokes it. */
+    this._heldScope = null;
     this._pendingToken = null;
     this._sentConfigKey = null;
     this._probeToken = 0;
@@ -851,10 +855,18 @@ class CamstackGridCard extends HTMLElement {
       return this._pendingToken;
     }
     this._tokenKey = key;
+    // A different scope than the one this card held: name the old one, so the
+    // integration revokes its token instead of leaving it alive for 90 days.
+    const held = this._heldScope;
+    const replaces =
+      held && held.key !== key
+        ? { device_ids: held.deviceIds, ...(held.talk ? { talk: true } : {}) }
+        : null;
     this._pendingToken = this._hass
       .callApi("POST", "camstack/embed_token", {
         kind: "grid-view",
         device_ids: deviceIds,
+        ...(replaces ? { replaces } : {}),
         // Asked for ONLY by a card that frames the hub itself. Without it the
         // answer carries no token — see the header.
         ...(this._isDirect() ? { direct: true } : {}),
@@ -872,6 +884,7 @@ class CamstackGridCard extends HTMLElement {
         // blaming an option that may not exist yet.
         this._talkGranted =
           result && typeof result.talk === "boolean" ? result.talk : null;
+        this._heldScope = { key, deviceIds: [...deviceIds], talk: this._talkGranted === true };
         this._proxyBase =
           result && typeof result.proxy_base === "string" && result.proxy_base
             ? result.proxy_base

@@ -29,15 +29,12 @@
  * explicit `url_base` frames the hub directly, has no relay in front of it,
  * and still gets `#t=` — the one case that needs it.
  *
- * ## A known gap: thumbnails
+ * ## Thumbnails
  *
  * The hub's event-media plane (`/addon/pipeline-analytics/event-media/…`)
- * accepts a session/OAuth token or a `cst_` scoped token, and answers 401 to a
- * `csv_` SHARE token — even for a device inside that token's own scope. The
- * integration mints share tokens (it will not put an account credential in a
- * browser), so this card lists its events with the text and the badges and
- * WITHOUT the pictures until the hub's gate learns to accept a scoped share
- * token. See the component README.
+ * used to answer 401 to the old share-link format. Since the hub's one token
+ * format (D895) it accepts an `events-view` grant (`share: ['events-view']`)
+ * and refuses any blob whose camera is outside the token's own devices.
  *
  * ## Height
  *
@@ -214,6 +211,8 @@ class CamstackEventsCard extends HTMLElement {
     this._grantKnown = false;
     this._tokenExpiresAt = null;
     this._tokenKey = null;
+    /** The scope this card last HELD a token for (see the grid card). */
+    this._heldScope = null;
     this._pendingToken = null;
   }
 
@@ -481,10 +480,15 @@ class CamstackEventsCard extends HTMLElement {
       return this._pendingToken;
     }
     this._tokenKey = key;
+    // A different device set than the one this card held: name the old one,
+    // so the integration revokes its token instead of leaving it alive.
+    const held = this._heldScope;
+    const replaces = held && held.key !== key ? { device_ids: held.deviceIds } : null;
     this._pendingToken = this._hass
       .callApi("POST", "camstack/embed_token", {
         kind: "events-view",
         device_ids: deviceIds,
+        ...(replaces ? { replaces } : {}),
         // Asked for ONLY by a card that frames the hub itself. Without it the
         // answer carries no token — see the header.
         ...(this._isDirect() ? { direct: true } : {}),
@@ -493,6 +497,7 @@ class CamstackEventsCard extends HTMLElement {
       .then((result) => {
         this._token = (result && result.token) || null;
         this._grantKnown = true;
+        this._heldScope = { key, deviceIds: [...deviceIds] };
         // The same-origin relay path the token is bound to (see the grid
         // card): a frame under it needs no certificate trust in the browser.
         this._proxyBase =

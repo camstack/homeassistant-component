@@ -142,7 +142,7 @@ def test_a_tile_open_reaches_the_camera_entity() -> None:
 def test_no_card_posts_data_to_a_wildcard_origin() -> None:
     """A `postMessage` that carries data names its target origin.
 
-    The relayed path no longer ships the share token, but the messages still
+    The relayed path no longer ships the view token, but the messages still
     name the cameras a dashboard shows and drive the wall's state; `'*'` hands
     both to whatever ends up in that frame.
     """
