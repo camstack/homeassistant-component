@@ -121,7 +121,6 @@ const EMBED_CONTRACT = {
   view: ["reel", "gallery"],
   thumb: ["small", "medium", "large"],
   theme: ["auto", "dark", "light"],
-  sort: ["time", "importance"],
   search_mode: ["text", "semantic"],
   fields: ["label", "sublabel", "camera", "time", "badges"],
   attributes: ["face", "plate"],
@@ -136,15 +135,16 @@ const EMBED_CONTRACT = {
   semantic_min_score: [0, 1],
 };
 
-/** What each `fields` key actually shows, in the operator's words. `badges`
- *  carries the zone chips AND the importance dot — turning it off is how a
- *  dashboard hides importance. */
+/** What each `fields` key actually shows, in the operator's words. The
+ *  embed's `importance` score pip is deliberately not offered: events are
+ *  newest first and nothing on a dashboard is ranked (operator, 2026-10-23),
+ *  and a `fields` list that does not name it leaves it off. */
 const FIELD_LABELS = {
   label: "Title chip over the thumbnail",
   sublabel: "Secondary line (detection class / audio labels)",
   camera: "Camera name",
   time: "Time",
-  badges: "Zone chips and the importance dot",
+  badges: "Zone chips and the active dot",
 };
 
 const ATTRIBUTE_LABELS = {
@@ -173,6 +173,24 @@ function friendlyName(hass, entityId) {
   return (
     (state && state.attributes && state.attributes.friendly_name) || entityId
   );
+}
+
+/**
+ * `camera_names` as `[deviceId, name]` pairs. YAML writes `617: Garage`, which
+ * arrives with the key already a string; a blank or non-string name is no name.
+ */
+function explicitNames(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return [];
+  }
+  const pairs = [];
+  for (const [key, value] of Object.entries(raw)) {
+    const id = /^\d+$/.test(key) ? Number(key) : null;
+    if (id !== null && typeof value === "string" && value.trim() !== "") {
+      pairs.push([id, value.trim()]);
+    }
+  }
+  return pairs;
 }
 
 function csv(value) {
@@ -438,6 +456,12 @@ class CamstackEventsCard extends HTMLElement {
     return ids;
   }
 
+  /**
+   * The `names=` dictionary: Home Assistant's friendly name for each camera
+   * entity, overridden by the card's own `camera_names` (`{ <device id>: name }`)
+   * — the renames a viewer share builder freezes, and the only way a card
+   * configured with `device_ids` can name a camera at all.
+   */
   _names(deviceIds) {
     const byId = new Map();
     if (Array.isArray(this._config.entities)) {
@@ -447,6 +471,9 @@ class CamstackEventsCard extends HTMLElement {
           byId.set(id, friendlyName(this._hass, entityId));
         }
       }
+    }
+    for (const [id, name] of explicitNames(this._config.camera_names)) {
+      byId.set(id, name);
     }
     const parts = [];
     for (const id of deviceIds) {
@@ -604,9 +631,8 @@ class CamstackEventsCard extends HTMLElement {
     if (EMBED_CONTRACT.search_mode.includes(this._config.search_mode)) {
       params.set("smode", String(this._config.search_mode));
     }
-    if (EMBED_CONTRACT.sort.includes(this._config.sort)) {
-      params.set("sort", String(this._config.sort));
-    }
+    // No order: the feed is newest first, always. A `sort:` key left in an
+    // older dashboard is not read — the embed would drop it anyway.
     // Every remaining option is a bounded number the embed validates: an
     // out-of-range value fails the WHOLE parse, so it is dropped here instead.
     for (const [key, param] of [
@@ -808,10 +834,6 @@ class CamstackEventsCardEditor extends HTMLElement {
         config.height,
         ""
       ),
-      select("sort", "Order", config.sort || "time", [
-        ["time", "Newest first"],
-        ["importance", "Most important first (of what is loaded)"],
-      ]),
       checkboxGroup(
         "fields",
         "What each card shows",
@@ -931,7 +953,8 @@ class CamstackEventsCardEditor extends HTMLElement {
       delete config.classes;
     }
     assign("search", text("search"));
-    config.sort = text("sort") === "importance" ? "importance" : "time";
+    // Retired: events are newest first, always. Saving drops an old key.
+    delete config.sort;
     config.search_mode = text("search_mode") === "semantic" ? "semantic" : "text";
     // Written even when EMPTY: the embed reads an empty allow-list as "images
     // only", and a deleted key would silently restore all five.

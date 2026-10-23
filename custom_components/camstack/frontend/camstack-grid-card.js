@@ -421,19 +421,23 @@ function resolveDeviceIds(hass, config) {
   return ids;
 }
 
-/** Tile captions, so the wall reads with Home Assistant's names, not the hub's. */
-function resolveLabels(hass, config) {
-  const labels = {};
-  if (!Array.isArray(config.entities)) {
-    return labels;
+/**
+ * The tiles that start AUDIBLE (`audio_on: [device ids]`) — the share link's
+ * `audio=`. Anything that is not a device id is dropped here; a camera that is
+ * not on the wall is dropped by `_pruneHostState` before the seed is sent.
+ */
+function audioOnFromConfig(config) {
+  const ids = [];
+  if (!Array.isArray(config.audio_on)) {
+    return ids;
   }
-  for (const entityId of config.entities) {
-    const id = deviceIdOf(hass, entityId);
-    if (id !== null) {
-      labels[String(id)] = friendlyName(hass, entityId);
+  for (const value of config.audio_on) {
+    const id = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value;
+    if (Number.isInteger(id) && id >= 0 && !ids.includes(id)) {
+      ids.push(id);
     }
   }
-  return labels;
+  return ids;
 }
 
 class CamstackGridCard extends HTMLElement {
@@ -702,6 +706,11 @@ class CamstackGridCard extends HTMLElement {
     this._sessionShowBoxes = null;
     this._sessionHighlightOn = null;
     this._sessionHighlight = null;
+    // The audible tiles are host-owned at runtime, and the saved document
+    // seeds them. Commanded as well as seeded: `embed-config` is read once, so
+    // a wall that is already open would otherwise keep the old set.
+    this._audioOnIds = new Set(audioOnFromConfig(this._config));
+    this._postCommand("setAudioOn", [...this._audioOnIds]);
     this._render();
   }
 
@@ -1312,7 +1321,9 @@ class CamstackGridCard extends HTMLElement {
       // tile audible-by-default and every pause forgotten.
       audioOnIds: [...this._audioOnIds],
       pausedIds: [...this._pausedIds],
-      labels: resolveLabels(this._hass, this._config),
+      // No `labels`: that field is the page's translated UI words, not camera
+      // names. The grid embed names a tile from the hub's device list and has
+      // no host channel for a camera name.
       ...(this._activeOnly() ? { activeOnly: true } : {}),
       ...(this._showBoxes() ? { showBoxes: true } : {}),
       // Seeded as well as commanded: a page mounting now renders its first
@@ -1956,6 +1967,10 @@ class CamstackGridCardEditor extends HTMLElement {
         "highlight_detection",
         "highlight_detection_classes",
         "highlight_detection_hold",
+        "highlight_motion_color",
+        "highlight_audio_color",
+        "highlight_detection_color",
+        "highlight_thickness",
       ]) {
         delete config[key];
       }

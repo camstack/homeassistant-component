@@ -191,6 +191,57 @@ export function talkState(asked, granted) {
   return asked ? "off" : "declined";
 }
 
+/** The border appearance the viewer draws when none is configured —
+ *  `DEFAULT_SETTINGS.highlight` in `settings-store.ts`, verbatim. The embed's
+ *  `appearance` needs all four once it is present, so a card that sets one
+ *  colour gets these for the rest. */
+export const HIGHLIGHT_APPEARANCE_DEFAULTS = Object.freeze({
+  motionColor: "#DC2626",
+  audioColor: "#3B82F6",
+  detectionColor: "#22C55E",
+  thickness: 3,
+});
+
+/** `thickness` is a border width in px; the viewer's picker offers 1–8. */
+const HIGHLIGHT_THICKNESS_RANGE = [1, 8];
+
+/** A hex colour, which is what the viewer's colour picker writes. Anything
+ *  else is refused: the value lands in a CSS `border` declaration. */
+const HEX_COLOUR = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+
+/** The card keys for the border appearance → the embed's field. */
+const APPEARANCE_COLOUR_KEYS = [
+  ["highlight_motion_color", "motionColor"],
+  ["highlight_audio_color", "audioColor"],
+  ["highlight_detection_color", "detectionColor"],
+];
+
+/**
+ * The border colours and thickness a card sets, as the embed's
+ * `highlight.appearance` — the same object the viewer's share link freezes in
+ * `hl=`. `null` when the card sets none of them, so the embed keeps drawing
+ * its own defaults; a value that is not usable is replaced by the default
+ * rather than sent, because one bad key must not fail the whole config parse.
+ */
+export function highlightAppearanceFromConfig(config) {
+  const appearance = { ...HIGHLIGHT_APPEARANCE_DEFAULTS };
+  let given = false;
+  for (const [key, field] of APPEARANCE_COLOUR_KEYS) {
+    const value = typeof config[key] === "string" ? config[key].trim() : "";
+    if (HEX_COLOUR.test(value)) {
+      appearance[field] = value;
+      given = true;
+    }
+  }
+  const thickness = config.highlight_thickness;
+  const [min, max] = HIGHLIGHT_THICKNESS_RANGE;
+  if (Number.isInteger(thickness) && thickness >= min && thickness <= max) {
+    appearance.thickness = thickness;
+    given = true;
+  }
+  return given ? appearance : null;
+}
+
 /** Fill any missing highlight field from the defaults —
  *  `withHighlightDefaults` in `grid-store.ts`. */
 export function withHighlightDefaults(patch) {
@@ -216,6 +267,7 @@ export function highlightFromConfig(config) {
   const hold = DETECTION_HOLD_OPTIONS.includes(config.highlight_detection_hold)
     ? config.highlight_detection_hold
     : GRID_HIGHLIGHT_DEFAULTS.detectionHoldSec;
+  const appearance = highlightAppearanceFromConfig(config);
   return withHighlightDefaults({
     motion: config.highlight_motion !== false,
     ...(audioUi === "off"
@@ -228,6 +280,7 @@ export function highlightFromConfig(config) {
     detection: config.highlight_detection === true,
     detectionClasses: classes,
     detectionHoldSec: hold,
+    ...(appearance ? { appearance } : {}),
   });
 }
 

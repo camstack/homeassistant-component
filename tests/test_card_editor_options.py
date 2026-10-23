@@ -8,7 +8,7 @@ Three separate rots are guarded here, and they are separate on purpose:
    be composable BY THE CARD and settable FROM THE EDITOR. An option only the
    YAML editor can reach is an option the operator does not have.
 
-2. **No free text over a closed set.** `view`, `thumb`, `theme`, `sort`,
+2. **No free text over a closed set.** `view`, `thumb`, `theme`,
    `smode`, `rows`, `cols`, `fields` and `attrs` each have a finite set of legal
    values in the embed's Zod schemas. A text input there is a typo generator:
    the embed's parse rejects the whole URL and the card shows an empty frame
@@ -66,7 +66,6 @@ EXPECTED_EVENTS_CONTRACT: dict[str, list[str]] = {
     "view": ["reel", "gallery"],
     "thumb": ["small", "medium", "large"],
     "theme": ["auto", "dark", "light"],
-    "sort": ["time", "importance"],
     "search_mode": ["text", "semantic"],
     "fields": ["label", "sublabel", "camera", "time", "badges"],
     "attributes": ["face", "plate"],
@@ -88,7 +87,6 @@ EVENTS_PARAM_TO_CONTROL = {
     "smode": "search_mode",
     "slimit": "semantic_limit",
     "sscore": "semantic_min_score",
-    "sort": "sort",
     "fields": "fields",
     "page": "page_size",
     "max": "max",
@@ -111,6 +109,12 @@ EVENTS_PARAMS_WITHOUT_A_CONTROL = {
     "mode": "the embed's own mode gate",
 }
 
+# The embed's `fields` keys the card deliberately never offers, with the reason.
+# `importance` is the key-event score pip: events are newest first and nothing
+# on a dashboard is ranked (operator, 2026-10-23). A `fields` list that does not
+# name it leaves it off, which is the embed's default.
+EVENTS_FIELDS_DELIBERATELY_UNOFFERED = {"importance"}
+
 # Absolute epoch bounds. A dashboard card is permanent; a frozen `since`/`until`
 # pair would silently stop the card dead on a date nobody remembers setting.
 # `age` (a rolling window) is the option that belongs on a card, and it is here.
@@ -120,7 +124,6 @@ CLOSED_SET_CONTROLS = {
     "view",
     "thumb",
     "theme",
-    "sort",
     "search_mode",
     "rows",
     "columns",
@@ -260,12 +263,14 @@ def test_the_open_set_keeps_free_text_and_offers_suggestions() -> None:
     assert "datalist" in editor, "the class suggestions are not offered"
 
 
-def test_hiding_the_importance_dot_is_one_checkbox() -> None:
-    """The operator's ask: hide importance. It rides the `badges` field."""
+def test_the_card_offers_no_order_and_no_importance() -> None:
+    """Events are newest first, always; importance is gone from every surface."""
     source = _read(EVENTS_CARD)
-    assert "badges" in _contract(source)["fields"]
+    contract = _contract(source)
+    assert "sort" not in contract, "the card still mirrors an order the embed dropped"
+    assert not EVENTS_FIELDS_DELIBERATELY_UNOFFERED & set(contract["fields"])
     editor = _editor_source(source, "CamstackEventsCardEditor")
-    assert re.search(r'checkboxGroup\(\s*"fields"', editor)
+    assert '"sort"' not in editor, "the editor still offers an order"
 
 
 # --- 3. the mirror does not drift -------------------------------------------
@@ -306,14 +311,20 @@ def test_contract_matches_the_viewer_source() -> None:
         pytest.skip(f"viewer checkout not found at {VIEWER_EMBED_SRC}")
 
     events_config = _read(VIEWER_EMBED_SRC / "events-config.ts")
-    share_url = _read(VIEWER_EMBED_SRC / "events-share-url.ts")
+    # Moved out of the embed into the viewer's `shared/events/`; an older
+    # checkout still has it beside the embed config.
+    share_url_path = VIEWER_EMBED_SRC / "events-share-url.ts"
+    if not share_url_path.is_file():
+        share_url_path = (
+            VIEWER_EMBED_SRC.parents[2] / "shared" / "events" / "events-share-url.ts"
+        )
+    share_url = _read(share_url_path)
     grid_config = _read(VIEWER_EMBED_SRC / "embed-grid-config.ts")
 
     from_viewer = {
         "view": _ts_enum(events_config, "eventsViewSchema"),
         "thumb": _ts_enum(events_config, "eventsThumbSizeSchema"),
         "theme": _ts_enum(events_config, "eventsThemeSchema"),
-        "sort": _ts_enum(events_config, "eventsSortSchema"),
         "search_mode": _ts_enum(events_config, "eventsSearchModeSchema"),
         "attributes": _ts_const_array(share_url, "EVENTS_ATTRIBUTES"),
     }
@@ -322,9 +333,13 @@ def test_contract_matches_the_viewer_source() -> None:
         r"eventsFieldsSchema = z\.object\(\{(?P<body>.*?)\}\)", events_config, re.S
     )
     assert fields_block is not None
-    from_viewer["fields"] = re.findall(
-        r"^\s*(\w+):\s*z\.boolean\(\)", fields_block.group("body"), re.M
-    )
+    from_viewer["fields"] = [
+        key
+        for key in re.findall(
+            r"^\s*(\w+):\s*z\.boolean\(\)", fields_block.group("body"), re.M
+        )
+        if key not in EVENTS_FIELDS_DELIBERATELY_UNOFFERED
+    ]
 
     events = _contract(_read(EVENTS_CARD))
     for key, values in from_viewer.items():

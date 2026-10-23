@@ -6,8 +6,9 @@
  * This one proves they WORK, in Chromium, and it exists for three things a
  * grep cannot see:
  *
- *  1. What the events editor EMITS. Ticking "hide the importance dot" has to
- *     come out as `fields=label,sublabel,camera,time` in the embed's query —
+ *  1. What the events editor EMITS. Unticking "zone chips and the active dot"
+ *     has to come out as `fields=label,sublabel,camera,time` in the embed's
+ *     query —
  *     an editor that writes a key the card's `_query` does not read is an
  *     editor full of controls that do nothing.
  *  2. That an out-of-range number is DROPPED. The embed fails the whole URL
@@ -199,7 +200,9 @@ async function run() {
     const events = await page.evaluate(async () => {
       const editor = document.createElement("camstack-events-card-editor");
       document.body.appendChild(editor);
-      editor.setConfig({});
+      // A dashboard from before the order was retired, with a rename the
+      // share builder froze: saving must drop the one and keep the other.
+      editor.setConfig({ sort: "importance", camera_names: { 617: "Garage, retro" } });
       editor.hass = { states: {} };
       const root = editor.shadowRoot;
 
@@ -216,11 +219,10 @@ async function run() {
           root.querySelector(`[data-group="${group}"]`).querySelectorAll("input")
         ).find((input) => input.value === value);
 
-      // Hide the importance dot, order by importance, keep only tracks with a
-      // plate, search semantically, and ask for an illegal number of rows.
+      // Hide the zone chips, keep only tracks with a plate, search
+      // semantically, and ask for an illegal number of rows.
       box("fields", "badges").checked = false;
       box("attributes", "plate").checked = true;
-      root.getElementById("sort").value = "importance";
       root.getElementById("search_mode").value = "semantic";
       root.getElementById("page_size").value = "30";
       root.getElementById("max").value = "900000";
@@ -247,7 +249,7 @@ async function run() {
     const params = new URLSearchParams(events.query);
 
     check("every closed-set option is a select or a checkbox group", () => {
-      for (const id of ["view", "thumb", "theme", "sort", "search_mode", "rows", "columns"]) {
+      for (const id of ["view", "thumb", "theme", "search_mode", "rows", "columns"]) {
         assert.equal(events.kinds[id], "select:select-one", id);
       }
       assert.equal(events.kinds.fields, "group");
@@ -256,11 +258,19 @@ async function run() {
     check("the open set keeps its suggestions", () => {
       assert.ok(events.suggestions > 0, "no class suggestions offered");
     });
-    check("unticking badges hides the importance dot", () => {
+    check("there is no order control, and an old sort is not saved", () => {
+      assert.equal("sort" in events.kinds, false);
+      assert.equal("sort" in events.emitted, false);
+      assert.equal(params.has("sort"), false);
+    });
+    check("camera_names survives the editor and becomes names=", () => {
+      assert.deepEqual(events.emitted.camera_names, { 617: "Garage, retro" });
+      assert.ok(events.query.includes("&names=617:Garage%2C%20retro"), events.query);
+    });
+    check("unticking badges hides the zone chips", () => {
       assert.equal(params.get("fields"), "label,sublabel,camera,time");
     });
-    check("order, search mode and page size reach the embed", () => {
-      assert.equal(params.get("sort"), "importance");
+    check("search mode and page size reach the embed", () => {
       assert.equal(params.get("smode"), "semantic");
       assert.equal(params.get("page"), "30");
       assert.equal(params.get("attrs"), "plate");
