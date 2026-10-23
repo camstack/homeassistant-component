@@ -31,6 +31,11 @@ _ENTITY_CATEGORIES: dict[str, EntityCategory] = {
 # `button` form already declares, so one string covers both shapes.
 VERB_PAYLOAD = "PRESS"
 
+# What a static attribute may hold. The hub announces them as a flat object of
+# JSON scalars; a nested value is dropped rather than stringified, so nothing
+# here invents a representation the hub did not choose.
+_ATTRIBUTE_SCALARS = (str, int, float, bool)
+
 
 class CamStackPushEntity(Entity):
     """One Home Assistant entity backed by one pushed component."""
@@ -87,6 +92,27 @@ class CamStackPushEntity(Entity):
         """Return the icon the hub chose, if any."""
         icon = self._component.get("icon")
         return icon if isinstance(icon, str) else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return the static attributes the hub announced with the component.
+
+        Read live from the component, like every other property here, so a
+        re-announcement (a relabelled consumable, say) shows on the next state
+        write without the entity being rebuilt. Anything that is not an object
+        is ignored: a malformed `attributes` costs the attributes, never the
+        entity.
+        """
+        raw = self._component.get("attributes")
+        if not isinstance(raw, dict):
+            return None
+        kept = {
+            key: value
+            for key, value in raw.items()
+            if isinstance(key, str)
+            and (value is None or isinstance(value, _ATTRIBUTE_SCALARS))
+        }
+        return kept or None
 
     @property
     def entity_category(self) -> EntityCategory | None:

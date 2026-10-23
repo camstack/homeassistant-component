@@ -30,18 +30,47 @@ async def async_setup_entry(
 
 
 class CamStackSensor(CamStackPushEntity, SensorEntity):
-    """A pushed reading: a timestamp, a number or a label."""
+    """A pushed reading: a timestamp, a number, an enum or a label."""
 
     @property
     def device_class(self) -> SensorDeviceClass | None:
-        """Return the device class the hub asked for, if HA has it."""
+        """Return the device class the hub asked for, if HA has it.
+
+        `enum` counts only with a usable `options` list: Home Assistant raises
+        on every state write of an enum it cannot check, and swallows that
+        inside the write. Without the list the value stays plain text.
+        """
         raw = self._component.get("device_class")
         if not isinstance(raw, str):
             return None
         try:
-            return SensorDeviceClass(raw)
+            device_class = SensorDeviceClass(raw)
         except ValueError:
             return None
+        if device_class is SensorDeviceClass.ENUM and self._enum_options is None:
+            return None
+        return device_class
+
+    @property
+    def _enum_options(self) -> list[str] | None:
+        """Return the hub's `options` list, when it is a non-empty list of text."""
+        raw = self._component.get("options")
+        if not isinstance(raw, list) or not raw:
+            return None
+        if not all(isinstance(option, str) for option in raw):
+            return None
+        return list(raw)
+
+    @property
+    def options(self) -> list[str] | None:
+        """Return the enum's options — and only an enum's.
+
+        Home Assistant refuses `options` on any other device class, so a stray
+        list on a numeric sensor must not reach it.
+        """
+        if self.device_class is not SensorDeviceClass.ENUM:
+            return None
+        return self._enum_options
 
     @property
     def state_class(self) -> SensorStateClass | None:
@@ -76,6 +105,10 @@ class CamStackSensor(CamStackPushEntity, SensorEntity):
         device_class = self.device_class
         if device_class is SensorDeviceClass.TIMESTAMP:
             return dt_util.parse_datetime(raw)
+        if device_class is SensorDeviceClass.ENUM:
+            # A value outside the list raises inside the state write, exactly
+            # like text on a timestamp sensor: unknown, not frozen.
+            return raw if raw in (self.options or []) else None
         if device_class is not None or self.native_unit_of_measurement is not None:
             try:
                 return float(raw)
