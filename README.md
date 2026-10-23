@@ -330,7 +330,7 @@ aspect_ratio: "16:9"
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `entities` | — | CamStack camera entities, in tile order. Their Home Assistant names caption the tiles |
+| `entities` | — | CamStack camera entities, in tile order. Tiles are captioned with the hub's camera names: the grid embed has no way to take a name from the card |
 | `device_ids` | — | Hub device ids, when a camera has no entity. `entities` wins if both are set |
 | `title` | — | `ha-card` header |
 | `layout_mode` | `auto` | How the wall is arranged: `auto`, `fit`, `flow` or `fixed`. See below |
@@ -342,6 +342,7 @@ aspect_ratio: "16:9"
 | `height` | `400` | Card height in px. `fit` with `aspect_ratio: none` only |
 | `quality` | `auto` | `auto`, `high`, `mid`, `low` |
 | `show_names` | `true` | Overlay the camera name on each tile |
+| `audio_on` | — | Device ids whose tiles start **audible**, e.g. `[617, 615]`; every other tile starts muted. The control bar can still change it for the session. A saved change reaches an open wall without a reload |
 | `show_boxes` | `false` | Live detection boxes |
 | `active_only` | `false` | Only cameras currently active |
 | `show_controls` | `true` | The control bar under the wall |
@@ -352,6 +353,10 @@ aspect_ratio: "16:9"
 | `highlight_detection` | `false` | `highlight` only — detections light the border |
 | `highlight_detection_classes` | — | `highlight_detection` only — `person`, `vehicle`, `animal`, `face`, `plate`. Empty means any |
 | `highlight_detection_hold` | `3` | `highlight_detection` only — seconds the border stays lit: `2`, `3`, `5`, `8` |
+| `highlight_motion_color` | `"#DC2626"` | `highlight` only — border colour for motion, as a quoted hex (`"#RGB"`, `"#RRGGBB"`, with or without alpha) |
+| `highlight_audio_color` | `"#3B82F6"` | `highlight` only — border colour for audio |
+| `highlight_detection_color` | `"#22C55E"` | `highlight` only — border colour for detections |
+| `highlight_thickness` | `3` | `highlight` only — border width in px, 1–8. Any of these four set means all four are sent; the rest take the viewer's defaults. A value that is not a hex colour or is out of range is replaced by its default |
 | `url_base` | — | Override the hub address. Leave empty: the card asks the integration |
 
 #### Arranging the wall
@@ -523,13 +528,13 @@ rows: 1
 | --- | --- | --- |
 | `entities` | *every exported camera* | Cameras to report on |
 | `device_ids` | — | Hub device ids, as above |
+| `camera_names` | — | Names to show instead of the hub's, keyed by device id: `{617: "Garage", 615: "Porch"}`. Wins over an entity's Home Assistant name; the only way to name a camera given by `device_ids` |
 | `view` | `reel` | `reel` (horizontal strip) or `gallery` |
 | `thumb` | `small` | `small`, `medium`, `large` |
 | `rows` | `1` | Reel depth, 1–6 |
 | `columns` | `auto` | Gallery columns |
 | `height` | *fitted* | Pixels. Left empty the reel height is COMPUTED from `thumb` and `rows` — the hub's card is a fixed size and a shorter frame silently cuts the timestamp off every card |
-| `sort` | `time` | `time` (newest first) or `importance`. Importance orders the rows **already loaded** — the hub paginates by time — so pair it with `max_age_ms` for a stable top-N |
-| `fields` | *all five* | What each card shows: any of `label`, `sublabel`, `camera`, `time`, `badges`. **`badges` carries the zone chips and the importance dot — untick it to hide importance.** An empty list is a real setting: pictures only |
+| `fields` | *all five* | What each card shows: any of `label`, `sublabel`, `camera`, `time`, `badges` (the zone chips and the active dot). An empty list is a real setting: pictures only |
 | `attributes` | — | Keep only tracks carrying `face` and/or `plate`. This is a second axis, ANDed with the classes and the search |
 | `classes` | — | Object classes, e.g. `[person, vehicle]`. Open set — the editor suggests the known ones |
 | `search` | — | Free-text search |
@@ -546,8 +551,12 @@ rows: 1
 Two of the embed's parameters are deliberately **not** card options: `since` and
 `until`, its absolute epoch bounds. A dashboard card is permanent, and a frozen
 window would stop it dead on a date nobody remembers setting — `max_age_ms` is
-the rolling version and is here. Device names ride the cards automatically, from
-each entity's Home Assistant name.
+the rolling version and is here. Device names ride the card automatically, from
+each entity's Home Assistant name, and `camera_names` overrides them.
+
+There is no order option: events are **newest first, always**. A `sort:` key
+left in an older dashboard is ignored, and saving the card from the editor
+removes it.
 
 ### How the cards authenticate
 

@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added
+
+- **Cards take every option the viewer's share builders freeze.** The events
+  card's `camera_names` (`{<device id>: name}`) becomes the embed's `names=`
+  and wins over an entity's Home Assistant name — the only way to name a
+  camera given by `device_ids`. The grid card's `audio_on` (device ids) seeds
+  the tiles that start audible, exactly as the link's `audio=`, and a saved
+  change reaches an open wall. `highlight_motion_color`,
+  `highlight_audio_color`, `highlight_detection_color` (hex) and
+  `highlight_thickness` (1–8 px) become the border `appearance`, as in the
+  link's `hl=`.
+
+### Removed
+
+- **The events card has no order.** Events are newest first, always: the
+  `sort` option and its editor control are gone, an old `sort:` key is ignored,
+  and saving from the editor drops it. `importance` is not offered as a field.
+- The grid card no longer sends Home Assistant names as the embed's `labels`.
+  That field is the wall's translated UI words; the names were always ignored
+  and tiles were always captioned with the hub's names.
+
 ### Changed
 
 - **Card tokens use the hub's one token format** (CamStack server 1.2.606+,
