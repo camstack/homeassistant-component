@@ -53,6 +53,16 @@ them, and the hub marks everything an operator would not automate on
 and the controls are enabled; the rest are registered and waiting for you to
 enable them in the entity settings.
 
+**Attributes and enums come from the hub too.** A component entry may carry an
+`attributes` object — a flat map of JSON scalars, such as a consumable's
+`form`, `kind` and `label` — and every entity shows it as state attributes,
+refreshed whenever the hub re-announces the device. A sensor announced with
+`device_class: "enum"` and an `options` list (a consumable's status: `ok`,
+`low`, `empty`, `full`, `replace`) is a real enum: its value stays text, the
+options are offered to automations, and a value outside them reads as
+`unknown`. Without a usable `options` list it is plain text, and every other
+sensor with a device class is still a number.
+
 ## Install
 
 ### HACS (recommended)
