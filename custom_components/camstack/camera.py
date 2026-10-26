@@ -58,7 +58,7 @@ from .api import CamStackError
 from .const import DOMAIN, MANUFACTURER
 from .coordinator import CamStackConfigEntry, CamStackCoordinator, CamStackDevice
 from .entity import CamStackPushEntity
-from .push import CamStackPushHub
+from .push import CamStackPushHub, LiveEntities, entity_missing
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -81,14 +81,19 @@ async def async_setup_entry(
 
     coordinator = entry.runtime_data.coordinator
     registry = er.async_get(hass)
+    # Cameras this process is running. A registry row alone is not enough: a
+    # restart restores the row, and the cards then see an entity with no
+    # `camstack_device_id`.
+    live: LiveEntities = set()
 
     @callback
     def _async_add_new() -> None:
         """Add the primary entity of every exported camera that has none.
 
-        Asked of the entity registry on every read, not remembered: a remembered
+        Asked on every read, not remembered from a previous one: a remembered
         set kept a camera whose entity had been removed (a pruned device, a
-        manual delete) absent for good, until the next restart.
+        manual delete) absent for good. Absence is :func:`entity_missing`,
+        the same check the push entities use.
         """
         data = coordinator.data
         if data is None:
@@ -96,14 +101,18 @@ async def async_setup_entry(
         fresh = [
             camera
             for camera in data.cameras()
-            if registry.async_get_entity_id(
-                Platform.CAMERA, DOMAIN, f"{DOMAIN}_{camera.device_id}_camera"
+            if entity_missing(
+                registry,
+                Platform.CAMERA,
+                f"{DOMAIN}_{camera.device_id}_camera",
+                live,
             )
-            is None
         ]
         if not fresh:
             return
-        async_add_entities(CamStackCamera(coordinator, camera) for camera in fresh)
+        async_add_entities(
+            CamStackCamera(coordinator, camera, live) for camera in fresh
+        )
 
     _async_add_new()
     entry.async_on_unload(coordinator.async_add_listener(_async_add_new))
@@ -375,13 +384,17 @@ class CamStackCamera(CoordinatorEntity[CamStackCoordinator], _CamStackCameraSess
     _attr_name = None
 
     def __init__(
-        self, coordinator: CamStackCoordinator, device: CamStackDevice
+        self,
+        coordinator: CamStackCoordinator,
+        device: CamStackDevice,
+        live: LiveEntities,
     ) -> None:
         """Build the entity and prepare its WebRTC session bookkeeping."""
         CoordinatorEntity.__init__(self, coordinator)
         _CamStackCameraSession.__init__(self)
         self._device_id = device.device_id
         self._device_key = device.device_key
+        self._live = live
         # `camstack_<deviceId>_camera` — the same numeric identity every
         # entity the hub pushes is keyed on. The hub announces NO component
         # for the adaptive stream precisely so this one owns the key: an
@@ -394,6 +407,14 @@ class CamStackCamera(CoordinatorEntity[CamStackCoordinator], _CamStackCameraSess
             name=device.name,
             manufacturer=MANUFACTURER,
         )
+
+    async def async_added_to_hass(self) -> None:
+        """Record that this camera is running, so a refresh does not rebuild it."""
+        await super().async_added_to_hass()
+        # The platform domain, matching the key `entity_missing` is asked with.
+        live_key = (self.platform.domain, self._attr_unique_id or "")
+        self._live.add(live_key)
+        self.async_on_remove(lambda: self._live.discard(live_key))
 
     @property
     def _device(self) -> CamStackDevice | None:

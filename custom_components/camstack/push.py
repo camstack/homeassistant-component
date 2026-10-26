@@ -77,6 +77,11 @@ _LOGGER = logging.getLogger(__name__)
 
 type EntityFactory = Callable[[CamStackPushHub, str, str], Entity]
 
+# `(platform domain, unique_id)` for an entity this process is actually
+# running. A registry row is not the same thing: a restart restores the row
+# and nothing else.
+type LiveEntities = set[tuple[str, str]]
+
 
 @dataclass(frozen=True, slots=True)
 class PushDevice:
@@ -101,6 +106,31 @@ class PushDevice:
             manufacturer=str(block.get("mf") or MANUFACTURER),
             model=str(block.get("mdl") or ""),
         )
+
+
+def entity_missing(
+    registry: er.EntityRegistry,
+    platform: str,
+    unique_id: str,
+    live: LiveEntities,
+) -> bool:
+    """Return whether this unique id should be built in this process.
+
+    The registry is what Home Assistant remembered, not what is running. An
+    entity can be gone from the registry (a removal on a smaller announce, a
+    pruned device, a manual delete) while its component is still announced,
+    and it can equally be present and enabled while nothing in this process
+    is attached to it — a restart restores the row and nothing else. Both are
+    missing. An entry the operator disabled is deliberately not missing:
+    re-creating it would silently undo their choice.
+    """
+    entity_id = registry.async_get_entity_id(platform, DOMAIN, unique_id)
+    if entity_id is None:
+        return True
+    entry = registry.async_get(entity_id)
+    if entry is None or entry.disabled_by is not None:
+        return False
+    return (platform, unique_id) not in live
 
 
 def push_unique_id(device_key: str, component_key: str, component: Any) -> str:
@@ -280,14 +310,8 @@ class CamStackPushHub:
     def _async_missing(self, keys: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
         """Return the components that have no entity, whatever the store says.
 
-        The stored set is the hub's last announcement, not a statement about
-        Home Assistant. An entity can be gone from the registry (a removal on
-        a smaller announce, a pruned device, a manual delete) while its
-        component is still announced, and diffing announce against announce
-        then never rebuilds it. So a component is missing when the registry
-        has no entry for its unique_id, or the entry is enabled but no entity
-        is running on it. An entry the OPERATOR disabled is deliberately not
-        missing: re-creating it would silently undo their choice.
+        Diffing an announce against the previous announce never rebuilds an
+        entity the registry lost, so absence is :func:`entity_missing`.
         """
         registry = er.async_get(self.hass)
         missing: list[tuple[str, str]] = []
@@ -297,14 +321,7 @@ class CamStackPushHub:
             if not isinstance(platform, str):
                 continue
             unique_id = push_unique_id(device_key, component_key, component)
-            entity_id = registry.async_get_entity_id(platform, DOMAIN, unique_id)
-            if entity_id is None:
-                missing.append((device_key, component_key))
-                continue
-            entry = registry.async_get(entity_id)
-            if entry is None or entry.disabled_by is not None:
-                continue
-            if (platform, unique_id) not in self._live:
+            if entity_missing(registry, platform, unique_id, self._live):
                 missing.append((device_key, component_key))
         return missing
 

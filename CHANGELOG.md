@@ -31,6 +31,15 @@
   That field is the wall's translated UI words; the names were always ignored
   and tiles were always captioned with the hub's names.
 
+### Fixed
+
+- **Membership cameras come back after a Home Assistant restart.** The
+  registry row surviving the restart was treated as "already added", so the
+  camera stayed without `camstack_device_id` and the grid and events cards —
+  which keep only entities carrying that attribute — went empty. An enabled
+  row with nothing running on it is added again. A camera the operator
+  disabled stays disabled.
+
 ### Changed
 
 - **Card tokens use the hub's one token format** (CamStack server 1.2.606+,

@@ -214,6 +214,10 @@ Consequences worth knowing:
   like an empty one is the single most expensive failure here.
 - **A device imported *from* Home Assistant is refused even if exported**,
   because sending it back mirrors it across the bridge. Both sides enforce it.
+- **The membership camera comes back after a restart.** Home Assistant
+  restores the registry row and not the running entity. An enabled camera is
+  added again and still carries `camstack_device_id`, which is what the cards
+  filter on. A camera you disabled stays disabled.
 
 ### The component is generic
 
