@@ -58,8 +58,10 @@ def test_unset_or_illegal_tile_settings_are_not_sent() -> None:
     assert "tileDetailZone" not in query
 
 
-def _click_outcome(*, source_is_frame: bool, origin: str, message: dict, url: str) -> bool:
-    """True when the card opened a detail for this message."""
+def _click_outcome(
+    *, source_is_frame: bool, origin: str, message: dict, url: str
+) -> bool:
+    """Return whether the card opened a detail for this message."""
     return run_card(
         "camstack-events-card.js",
         f"""
@@ -79,11 +81,19 @@ def _click_outcome(*, source_is_frame: bool, origin: str, message: dict, url: st
     )
 
 
-CLICK = {"v": 1, "type": "trackClick", "trackId": "t-1", "deviceId": 7, "bestEventId": "e-1"}
+CLICK = {
+    "v": 1,
+    "type": "trackClick",
+    "trackId": "t-1",
+    "deviceId": 7,
+    "bestEventId": "e-1",
+}
 
 
 def test_a_click_from_our_frame_and_origin_opens_the_detail() -> None:
-    assert _click_outcome(source_is_frame=True, origin="http://ha.test", message=CLICK, url=RELAYED)
+    assert _click_outcome(
+        source_is_frame=True, origin="http://ha.test", message=CLICK, url=RELAYED
+    )
     assert _click_outcome(
         source_is_frame=True, origin="https://hub.test:4443", message=CLICK, url=DIRECT
     )
