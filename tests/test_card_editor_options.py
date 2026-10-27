@@ -69,6 +69,8 @@ EXPECTED_EVENTS_CONTRACT: dict[str, list[str]] = {
     "search_mode": ["text", "semantic"],
     "fields": ["label", "sublabel", "camera", "time", "badges"],
     "attributes": ["face", "plate"],
+    # The viewer's `tileLabelMode` (`shared/events/events-tile-display.ts`).
+    "tile_label_mode": ["off", "icon", "label"],
 }
 
 EXPECTED_GRID_CONTRACT: dict[str, list[str]] = {
@@ -93,6 +95,9 @@ EVENTS_PARAM_TO_CONTROL = {
     "refresh": "refresh_ms",
     "age": "max_age_ms",
     "theme": "theme",
+    "tileLabelMode": "tile_label_mode",
+    "tileDetailCamera": "tile_detail_camera",
+    "tileDetailZone": "tile_detail_zone",
 }
 
 # Composed by the card from something other than an editor control, with the
@@ -129,6 +134,9 @@ CLOSED_SET_CONTROLS = {
     "columns",
     "fields",
     "attributes",
+    "tile_label_mode",
+    "tile_detail_camera",
+    "tile_detail_zone",
 }
 
 # Bounded numbers: an input the browser itself constrains, never a text box.

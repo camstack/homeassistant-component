@@ -21,6 +21,14 @@
   `highlight_audio_color`, `highlight_detection_color` (hex) and
   `highlight_thickness` (1–8 px) become the border `appearance`, as in the
   link's `hl=`.
+- **Events card: tile settings and a detail dialog.** `tile_label_mode`
+  (`off` / `icon` / `label`, default `icon`), `tile_detail_camera` and
+  `tile_detail_zone` (default off) are the viewer's own tile settings under
+  card keys, offered in the editor and sent only when set. Tapping an event
+  now opens its detail — the viewer's `mode=track` page, same relay, no
+  second credential — in a dialog (full screen on a phone) that closes with
+  ESC, the back button or its close button. The card acts on a tap only from
+  its own frame and the origin it framed.
 
 ### Removed
 

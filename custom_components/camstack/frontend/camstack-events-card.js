@@ -121,6 +121,10 @@ const EMBED_CONTRACT = {
   view: ["reel", "gallery"],
   thumb: ["small", "medium", "large"],
   theme: ["auto", "dark", "light"],
+  // The viewer's own tile settings (`shared/events/events-tile-display.ts`),
+  // under snake_case card keys. Defaults are the viewer's: glyph chips, no
+  // camera or zone line under the picture.
+  tile_label_mode: ["off", "icon", "label"],
   search_mode: ["text", "semantic"],
   fields: ["label", "sublabel", "camera", "time", "badges"],
   attributes: ["face", "plate"],
@@ -150,6 +154,14 @@ const FIELD_LABELS = {
 const ATTRIBUTE_LABELS = {
   face: "Has a face",
   plate: "Has a plate",
+};
+
+const DEFAULT_TILE_LABEL_MODE = "icon";
+
+const TILE_LABEL_MODE_LABELS = {
+  off: "Nothing over the picture",
+  icon: "Class icon",
+  label: "Icon and name",
 };
 
 const DEFAULT_FIELDS = EMBED_CONTRACT.fields.join(",");
@@ -232,6 +244,14 @@ class CamstackEventsCard extends HTMLElement {
     /** The scope this card last HELD a token for (see the grid card). */
     this._heldScope = null;
     this._pendingToken = null;
+    this._detail = null;
+    this._onMessage = (event) => this._handleMessage(event);
+    this._onPopState = () => this._closeDetail(false);
+    this._onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        this._closeDetail(true);
+      }
+    };
   }
 
   setConfig(config) {
@@ -249,7 +269,13 @@ class CamstackEventsCard extends HTMLElement {
     this._render();
   }
 
+  connectedCallback() {
+    window.addEventListener("message", this._onMessage);
+  }
+
   disconnectedCallback() {
+    window.removeEventListener("message", this._onMessage);
+    this._closeDetail(false);
     // Invalidates a probe still in flight, so a late answer cannot paint over
     // a card that has since been re-pointed or torn down.
     this._probeToken += 1;
@@ -613,6 +639,20 @@ class CamstackEventsCard extends HTMLElement {
     // Always sent: an empty allow-list means "images only", which absence does
     // not — see `_fields`.
     params.set("fields", this._fields());
+    // Tile settings: sent only when the card sets them, so an absent key is the
+    // viewer's default on both sides.
+    const labelMode = this._config.tile_label_mode;
+    if (EMBED_CONTRACT.tile_label_mode.includes(labelMode)) {
+      params.set("tileLabelMode", labelMode);
+    }
+    for (const [key, param] of [
+      ["tile_detail_camera", "tileDetailCamera"],
+      ["tile_detail_zone", "tileDetailZone"],
+    ]) {
+      if (typeof this._config[key] === "boolean") {
+        params.set(param, this._config[key] ? "1" : "0");
+      }
+    }
     if (this._view() === "reel") {
       params.set("rows", String(this._rows()));
     } else if (this._config.columns) {
@@ -706,6 +746,114 @@ class CamstackEventsCard extends HTMLElement {
     }
     this._renderedUrl = url;
     this._buildCard(url);
+  }
+
+  /**
+   * A `trackClick` from OUR frame: open its detail.
+   *
+   * Two checks, both required. The origin must be the one the card framed
+   * (the hub, or Home Assistant itself on a relayed card) and the source must
+   * be this card's own iframe window — another frame, or another tab's
+   * script, on the same origin is not the card's embed.
+   */
+  _handleMessage(event) {
+    const frame = this._iframe;
+    if (!frame || !this._renderedUrl) {
+      return;
+    }
+    if (event.source !== frame.contentWindow) {
+      return;
+    }
+    if (event.origin !== new URL(this._renderedUrl, window.location.href).origin) {
+      return;
+    }
+    const msg = event.data;
+    if (
+      !msg ||
+      typeof msg !== "object" ||
+      msg.v !== 1 ||
+      msg.type !== "trackClick" ||
+      typeof msg.trackId !== "string" ||
+      msg.trackId === "" ||
+      !Number.isInteger(msg.deviceId)
+    ) {
+      return;
+    }
+    this._openDetail(msg);
+  }
+
+  /** The detail iframe's URL: the events frame's own base, path and fragment
+   *  (relay path, or `#t=` on a direct card), `mode=track` and the three ids. */
+  _detailUrl(msg) {
+    const url = new URL(this._renderedUrl, window.location.href);
+    const params = new URLSearchParams();
+    params.set("mode", "track");
+    params.set("v", EVENTS_URL_VERSION);
+    params.set("id", msg.trackId);
+    params.set("device", String(msg.deviceId));
+    if (typeof msg.bestEventId === "string" && msg.bestEventId) {
+      params.set("best", msg.bestEventId);
+    }
+    params.set("theme", this._config.theme || "auto");
+    const names = this._names([msg.deviceId]);
+    url.search = names ? `${params.toString()}&names=${names}` : params.toString();
+    return url.toString();
+  }
+
+  _openDetail(msg) {
+    this._closeDetail(false);
+    const phone = window.matchMedia("(max-width: 600px)").matches;
+    const dialog = document.createElement("ha-dialog");
+    dialog.setAttribute("open", "");
+    dialog.setAttribute("heading", "CamStack event");
+    dialog.hideActions = true;
+    dialog.style.cssText = phone
+      ? "--mdc-dialog-min-width:100vw;--mdc-dialog-max-width:100vw;" +
+        "--mdc-dialog-min-height:100dvh;--mdc-dialog-max-height:100dvh;" +
+        "--ha-dialog-border-radius:0;"
+      : "--mdc-dialog-min-width:min(720px,92vw);--mdc-dialog-max-width:92vw;";
+    const frame = document.createElement("iframe");
+    frame.src = this._detailUrl(msg);
+    frame.allow = "autoplay; fullscreen";
+    frame.title = "CamStack event";
+    frame.style.cssText =
+      `width:100%;height:${phone ? "calc(100dvh - 72px)" : "70vh"};` +
+      "border:none;display:block;";
+    const close = document.createElement("ha-icon-button");
+    close.slot = "heading";
+    close.setAttribute("aria-label", "Close");
+    close.textContent = "\u00d7";
+    close.addEventListener("click", () => this._closeDetail(true));
+    dialog.append(close, frame);
+    // `closed` is the dialog's own dismissal (scrim, its ESC handling).
+    dialog.addEventListener("closed", () => this._closeDetail(true));
+    this.shadowRoot.appendChild(dialog);
+    this._detail = { dialog, hasHistory: true };
+    // A phone's back button should close the dialog, not leave the dashboard.
+    window.history.pushState({ camstackDetail: true }, "");
+    window.addEventListener("popstate", this._onPopState);
+    window.addEventListener("keydown", this._onKeyDown);
+  }
+
+  /** Remove the dialog. `popHistory`: also undo our history entry (a close the
+   *  user made, not a back press that already consumed it). */
+  _closeDetail(popHistory) {
+    const detail = this._detail;
+    if (!detail) {
+      return;
+    }
+    this._detail = null;
+    window.removeEventListener("popstate", this._onPopState);
+    window.removeEventListener("keydown", this._onKeyDown);
+    detail.dialog.remove();
+    if (
+      popHistory &&
+      detail.hasHistory &&
+      window.history.state &&
+      window.history.state.camstackDetail
+    ) {
+      window.history.back();
+    }
   }
 
   _frameStyle() {
@@ -888,6 +1036,30 @@ class CamstackEventsCardEditor extends HTMLElement {
         config.max_age_ms,
         "2592000000"
       ),
+      select(
+        "tile_label_mode",
+        "Over each picture",
+        config.tile_label_mode || DEFAULT_TILE_LABEL_MODE,
+        EMBED_CONTRACT.tile_label_mode.map((key) => [key, TILE_LABEL_MODE_LABELS[key]])
+      ),
+      select(
+        "tile_detail_camera",
+        "Camera name under each picture",
+        config.tile_detail_camera === true ? "on" : "off",
+        [
+          ["off", "Off"],
+          ["on", "On"],
+        ]
+      ),
+      select(
+        "tile_detail_zone",
+        "Zone under each picture",
+        config.tile_detail_zone === true ? "on" : "off",
+        [
+          ["off", "Off"],
+          ["on", "On"],
+        ]
+      ),
       select("theme", "Theme", config.theme || "auto", [
         ["auto", "Follow the dashboard"],
         ["dark", "Dark"],
@@ -977,6 +1149,20 @@ class CamstackEventsCardEditor extends HTMLElement {
       const value = Number(text(key));
       if (text(key) !== "" && Number.isFinite(value) && value >= min && (max <= 0 || value <= max)) {
         config[key] = value;
+      } else {
+        delete config[key];
+      }
+    }
+    // The viewer's defaults are not written, so an untouched card stays as it was.
+    const labelMode = text("tile_label_mode");
+    if (EMBED_CONTRACT.tile_label_mode.includes(labelMode) && labelMode !== DEFAULT_TILE_LABEL_MODE) {
+      config.tile_label_mode = labelMode;
+    } else {
+      delete config.tile_label_mode;
+    }
+    for (const key of ["tile_detail_camera", "tile_detail_zone"]) {
+      if (text(key) === "on") {
+        config[key] = true;
       } else {
         delete config[key];
       }
