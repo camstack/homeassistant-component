@@ -575,7 +575,7 @@ class CamstackEventsCard extends HTMLElement {
 
   _thumb() {
     const raw = this._config.thumb;
-    return raw === "medium" || raw === "large" ? raw : "small";
+    return raw === "small" || raw === "large" ? raw : "medium";
   }
 
   _rows() {
@@ -629,6 +629,17 @@ class CamstackEventsCard extends HTMLElement {
     return DEFAULT_GALLERY_HEIGHT;
   }
 
+  /**
+   * Home Assistant's language for the embed's own words. The embed has no
+   * i18n; it reads `lang` and falls back to the browser's language, so an
+   * Italian Home Assistant in an English browser would otherwise read English.
+   */
+  _lang() {
+    const hass = this._hass;
+    const tag = (hass && ((hass.locale && hass.locale.language) || hass.language)) || "";
+    return typeof tag === "string" ? tag.trim() : "";
+  }
+
   _query(deviceIds) {
     const params = new URLSearchParams();
     params.set("mode", "events");
@@ -636,6 +647,10 @@ class CamstackEventsCard extends HTMLElement {
     params.set("view", this._view());
     params.set("thumb", this._thumb());
     params.set("theme", this._config.theme || "auto");
+    const lang = this._lang();
+    if (lang) {
+      params.set("lang", lang);
+    }
     // Always sent: an empty allow-list means "images only", which absence does
     // not — see `_fields`.
     params.set("fields", this._fields());
@@ -645,13 +660,11 @@ class CamstackEventsCard extends HTMLElement {
     if (EMBED_CONTRACT.tile_label_mode.includes(labelMode)) {
       params.set("tileLabelMode", labelMode);
     }
-    for (const [key, param] of [
-      ["tile_detail_camera", "tileDetailCamera"],
-      ["tile_detail_zone", "tileDetailZone"],
-    ]) {
-      if (typeof this._config[key] === "boolean") {
-        params.set(param, this._config[key] ? "1" : "0");
-      }
+    // The camera line is off unless the card turns it on: left unsent, the
+    // viewer would derive it from the `fields` allow-list, which names `camera`.
+    params.set("tileDetailCamera", this._config.tile_detail_camera === true ? "1" : "0");
+    if (typeof this._config.tile_detail_zone === "boolean") {
+      params.set("tileDetailZone", this._config.tile_detail_zone ? "1" : "0");
     }
     if (this._view() === "reel") {
       params.set("rows", String(this._rows()));
@@ -911,7 +924,7 @@ class CamstackEventsCard extends HTMLElement {
   }
 
   static getStubConfig() {
-    return { view: "reel", thumb: "small", rows: 1 };
+    return { view: "reel", thumb: "medium", rows: 1 };
   }
 }
 
@@ -965,7 +978,7 @@ class CamstackEventsCardEditor extends HTMLElement {
         ["reel", "Reel (horizontal strip)"],
         ["gallery", "Gallery (grid)"],
       ]),
-      select("thumb", "Thumbnail size", config.thumb || "small", [
+      select("thumb", "Thumbnail size", config.thumb || "medium", [
         ["small", "Small"],
         ["medium", "Medium"],
         ["large", "Large"],
@@ -1105,7 +1118,7 @@ class CamstackEventsCardEditor extends HTMLElement {
       delete config.entities;
     }
     config.view = text("view") === "gallery" ? "gallery" : "reel";
-    config.thumb = text("thumb") || "small";
+    config.thumb = text("thumb") || "medium";
     config.rows = parseInt(text("rows"), 10) || 1;
     const columns = text("columns");
     assign("columns", columns === "auto" ? "" : columns);

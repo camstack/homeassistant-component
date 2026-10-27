@@ -2,8 +2,11 @@
 
 * The three tile settings travel under the VIEWER's param names
   (`tileLabelMode`, `tileDetailCamera`, `tileDetailZone`), from snake_case card
-  keys, and only when the card sets them: an absent key is the viewer's default
-  on both sides.
+  keys. An unset camera line is sent as off, because the viewer would otherwise
+  derive it from the `fields` list; an unset label mode or zone line is not sent
+  and is the viewer's default.
+* The tile size defaults to medium, and Home Assistant's language rides the URL
+  as `lang`.
 * A `trackClick` opens the detail only when it comes from THIS card's own
   iframe window AND from the origin the card framed. Both checks matter; the
   tests fail if either is removed.
@@ -24,13 +27,24 @@ RELAYED = "http://ha.test/api/camstack/p/grant/viewer/camstack/embed/index.html?
 DIRECT = "https://hub.test:4443/viewer/camstack/embed/index.html?mode=events&v=1#t=tok"
 
 
-def _query(config: dict) -> str:
+def _hass_extra(fields: dict) -> dict:
+    """Map the keyword fields onto Home Assistant's language properties."""
+    extra: dict = {}
+    if "locale" in fields:
+        extra["locale"] = {"language": fields["locale"]}
+    if "language" in fields:
+        extra["language"] = fields["language"]
+    return extra
+
+
+def _query(config: dict, **hass_fields: str) -> str:
+    extra = json.dumps(_hass_extra(hass_fields))
     return run_card(
         "camstack-events-card.js",
         f"""
         const card = new Card();
         card._config = {json.dumps(config)};
-        card._hass = hassWith({{}});
+        card._hass = Object.assign(hassWith({{}}), {extra});
         return card._query([7]);
         """,
     )
@@ -51,10 +65,10 @@ def test_tile_settings_are_sent_under_the_viewer_names() -> None:
     assert query["tileDetailZone"] == ["0"]
 
 
-def test_unset_or_illegal_tile_settings_are_not_sent() -> None:
+def test_unset_or_illegal_tile_settings_default_camera_line_off() -> None:
     query = parse_qs(_query({"tile_label_mode": "loud", "tile_detail_camera": "yes"}))
     assert "tileLabelMode" not in query
-    assert "tileDetailCamera" not in query
+    assert query["tileDetailCamera"] == ["0"]
     assert "tileDetailZone" not in query
 
 
@@ -158,3 +172,19 @@ def test_a_direct_card_keeps_its_fragment_credential_in_the_detail_frame() -> No
     parts = urlsplit(_detail_url(DIRECT))
     assert parts.netloc == "hub.test:4443"
     assert parts.fragment == "t=tok"
+
+
+def test_tile_size_defaults_to_medium() -> None:
+    query = parse_qs(_query({}))
+    assert query["thumb"] == ["medium"]
+    query = parse_qs(_query({"thumb": "large"}))
+    assert query["thumb"] == ["large"]
+
+
+def test_home_assistant_language_rides_the_embed_url() -> None:
+    assert parse_qs(_query({}, locale="it"))["lang"] == ["it"]
+
+
+def test_legacy_hass_language_is_the_fallback_and_absence_sends_nothing() -> None:
+    assert parse_qs(_query({}, language="it-IT"))["lang"] == ["it-IT"]
+    assert "lang" not in parse_qs(_query({}))

@@ -4,6 +4,10 @@
 
 ### Added
 
+- **Events card: defaults and language.** The tile size now defaults to
+  medium and the camera name under each picture is off unless
+  `tile_detail_camera` is true; the editor shows the same. The embed receives
+  Home Assistant's language (`lang`) and rebuilds when it changes.
 - **Entities carry the hub's static attributes.** A component's `attributes`
   object (JSON scalars — e.g. a consumable's `form`, `kind`, `label`) becomes
   the entity's state attributes, on every platform, and follows a
