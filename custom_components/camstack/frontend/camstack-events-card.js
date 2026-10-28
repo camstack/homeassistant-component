@@ -808,6 +808,10 @@ class CamstackEventsCard extends HTMLElement {
       params.set("best", msg.bestEventId);
     }
     params.set("theme", this._config.theme || "auto");
+    const lang = this._lang();
+    if (lang) {
+      params.set("lang", lang);
+    }
     const names = this._names([msg.deviceId]);
     url.search = names ? `${params.toString()}&names=${names}` : params.toString();
     return url.toString();

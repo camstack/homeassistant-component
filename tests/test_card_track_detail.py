@@ -142,13 +142,14 @@ def test_only_a_well_formed_trackclick_is_acted_on() -> None:
         )
 
 
-def _detail_url(url: str, theme: str = "dark") -> str:
+def _detail_url(url: str, theme: str = "dark", **hass_fields: str) -> str:
+    extra = json.dumps(_hass_extra(hass_fields))
     return run_card(
         "camstack-events-card.js",
         f"""
         const card = new Card();
         card._config = {{ theme: {json.dumps(theme)} }};
-        card._hass = hassWith({{}});
+        card._hass = Object.assign(hassWith({{}}), {extra});
         card._renderedUrl = {json.dumps(url)};
         return card._detailUrl({json.dumps(CLICK)});
         """,
@@ -188,3 +189,10 @@ def test_home_assistant_language_rides_the_embed_url() -> None:
 def test_legacy_hass_language_is_the_fallback_and_absence_sends_nothing() -> None:
     assert parse_qs(_query({}, language="it-IT"))["lang"] == ["it-IT"]
     assert "lang" not in parse_qs(_query({}))
+
+
+def test_the_detail_frame_carries_the_same_language_as_the_events_frame() -> None:
+    assert parse_qs(urlsplit(_detail_url(RELAYED, locale="it")).query)["lang"] == ["it"]
+    legacy = parse_qs(urlsplit(_detail_url(RELAYED, language="it-IT")).query)
+    assert legacy["lang"] == ["it-IT"]
+    assert "lang" not in parse_qs(urlsplit(_detail_url(RELAYED)).query)
