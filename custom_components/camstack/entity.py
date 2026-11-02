@@ -131,15 +131,33 @@ class CamStackPushEntity(Entity):
         return self._component.get("enabled_by_default", True) is not False
 
     @property
-    def available(self) -> bool:
-        """Return whether camstack is still alive.
+    def _availability_topic(self) -> str | None:
+        """Return the topic carrying the device's own liveness, if declared."""
+        topic = self._component.get("availability_topic")
+        return topic if isinstance(topic, str) else None
 
-        The heartbeat is the ONE source of truth for that, deliberately: a
-        second signal is a second thing that can disagree, and an entity that
-        looks healthy while its feed is dead is worse than one that is
-        plainly unavailable.
+    @property
+    def available(self) -> bool:
+        """Return whether this entity can be trusted right now.
+
+        Two facts, kept apart. The heartbeat is the hub's liveness: when it
+        stops, nothing camstack says is believable and every entity goes
+        unavailable. A device's own `online` is the device's liveness (a
+        provider that lost its session, a gateway that went down), and the hub
+        declares it per component with `availability_topic`,
+        `payload_available` and `payload_not_available`. A component that
+        declares none is judged by the heartbeat alone; one that does is
+        available only while the last value seen on that topic equals
+        `payload_available`. No value yet is unavailable: unknown is never
+        available.
         """
-        return self._hub.link_alive
+        if not self._hub.link_alive:
+            return False
+        topic = self._availability_topic
+        if topic is None:
+            return True
+        expected = self._component.get("payload_available", "true")
+        return self._hub.state(topic) == expected
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -242,6 +260,9 @@ class CamStackPushEntity(Entity):
         Assistant started, with nothing in the log to say why.
         """
         topics = [] if self._state_topic is None else [self._state_topic]
+        availability = self._availability_topic
+        if availability is not None and availability not in topics:
+            topics.append(availability)
         controls = self._component.get("controls")
         for control in controls.values() if isinstance(controls, dict) else []:
             topic = control.get("state_topic") if isinstance(control, dict) else None

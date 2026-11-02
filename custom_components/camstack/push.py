@@ -6,9 +6,9 @@ CamStack pushes; Home Assistant never polls it for a value. The hub's
 understands them:
 
 ``heartbeat``
-    Liveness, on a fixed cadence, and the ONLY availability signal there is.
-    When it stops every entity goes unavailable — deliberately no second
-    source that could disagree about whether camstack is alive.
+    The hub's liveness, on a fixed cadence. When it stops every entity goes
+    unavailable. It says nothing about a single device: that is the device's
+    own `online` value, which a component opts into with `availability_topic`.
 
 ``batch``
     State updates accumulate hub-side and arrive together. Across ~880

@@ -45,6 +45,13 @@
 
 ### Fixed
 
+- **A device that went offline shows unavailable.** A component the hub
+  declares with `availability_topic` (plus `payload_available` and
+  `payload_not_available`) is available only while the hub link is alive and
+  the last value on that topic equals `payload_available`; no value yet is
+  unavailable. A component without it is judged by the heartbeat alone, as
+  before. The heartbeat stays the hub's liveness, the device's own `online` is
+  the device's.
 - **Membership cameras come back after a Home Assistant restart.** The
   registry row surviving the restart was treated as "already added", so the
   camera stayed without `camstack_device_id` and the grid and events cards —

@@ -221,9 +221,10 @@ SYNTHETIC_DEVICE_KEYS: Final = frozenset(
     }
 )
 
-# The hub's heartbeat cadence (`HEARTBEAT_INTERVAL_MS`). It doubles as the
-# availability signal, and it is the ONLY one: there is deliberately no second
-# source that could disagree about whether camstack is alive.
+# The hub's heartbeat cadence (`HEARTBEAT_INTERVAL_MS`). It is the hub's
+# liveness signal: when it stops, every entity is unavailable. A device's own
+# `online` is a different fact (the device's liveness), declared by the hub per
+# component through `availability_topic` and read by the entity base class.
 HEARTBEAT_INTERVAL: Final = timedelta(seconds=30)
 # Three missed heartbeats. Tight enough to notice, loose enough to survive one
 # slow reconcile on a busy hub.
